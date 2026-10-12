@@ -158,6 +158,21 @@ public class Orchestrator : IDisposable
     /// <summary>当前正在尝试连接的对端地址（未连接时给状态栏用，让用户看到确实在连）。</summary>
     public string CurrentTarget => _lastTarget;
 
+    /// <summary>
+    /// 反向验证开关：置 1 时恢复 v1.6.8 及以前"远控期间前台是自家窗口就把控制权弹回本机"的旧行为。
+    /// 只有 tools/own_window_test.py 会用 —— 用来证明"设置页一打开就跳不到对端"这条测试真的抓得到
+    /// 那个 bug（只修代码不修测试，测试会白过）。
+    /// </summary>
+    static readonly bool BugOwnWindow = Environment.GetEnvironmentVariable("MB_BUG_OWN_WINDOW") == "1";
+
+    /// <summary>
+    /// 自家确认弹窗（连接确认 / 反向控制请求）正开着。远控（Capture）期间它为真时：
+    /// 钩子放行物理鼠标（见 <see cref="HookEngine.MouseLetThrough"/>）、
+    /// Orchestrator 不再把鼠标位移转发给对端 —— 用户要能点到弹窗上的「允许/拒绝」。
+    /// 只针对弹窗，不给设置页用：设置页是常驻窗口，放行就会回到"事件双投 + 控制权弹回"的老问题。
+    /// </summary>
+    volatile bool _askOpen;
+
     // ================= 启动 / 应用配置 =================
 
     public void Start()
@@ -170,8 +185,10 @@ public class Orchestrator : IDisposable
         _hook.Button += OnHookButton;
         _hook.Wheel += OnHookWheel;
         _hook.Key += OnHookKey;
-        // 远控期间前台若是本程序自己的窗口，就不吞鼠标键盘 —— 防止"点哪儿都没反应"
+        // 远控期间前台若是本程序自己的窗口，就不吞**键盘**（鼠标另说，见 HookEngine 注释）
         _hook.LetThroughOwnWindows = true;
+        // 远控期间自家确认弹窗开着 → 物理鼠标归本机，用户才能点到「允许/拒绝」
+        _hook.MouseLetThrough = () => _askOpen;
         _hook.Start();
 
         _clip.Changed += OnClipboardChanged;
@@ -1022,12 +1039,14 @@ public class Orchestrator : IDisposable
             try
             {
                 var w = new AskWindow(link.Peer.Name ?? "", link.RemoteAddress);
-                w.Answer.ContinueWith(t => tcs.TrySetResult(t.Result), TaskScheduler.Default);
+                w.Answer.ContinueWith(t => { _askOpen = false; tcs.TrySetResult(t.Result); }, TaskScheduler.Default);
+                _askOpen = true;   // 弹窗开着 → 远控期间放行本机鼠标，用户才点得到按钮
                 w.Show();
                 Log.Info($"已弹出连接确认窗（来自 {link.Peer.Name} {link.RemoteAddress}）");
             }
             catch (Exception ex)
             {
+                _askOpen = false;
                 Log.Error("弹出连接确认窗失败，按拒绝处理", ex);
                 tcs.TrySetResult(false);
             }
@@ -1379,9 +1398,15 @@ public class Orchestrator : IDisposable
         else
         {
             if (_clientDisp.W <= 0) return;
-            // 前台是本程序自己的窗口：鼠标要留给用户操作自家界面，不能再转给对端。
-            // 直接切回本机（并让物理光标正常走），避免"在自家窗口里点一下，对端也跟着动"。
-            if (Native.IsOwnProcessForeground())
+            // 自家确认弹窗（连接确认/反向控制请求）开着：钩子已放行本机鼠标，
+            // 这里也不能再转发位移或把光标钉回中心，否则用户点不到「允许」按钮。
+            if (_askOpen) return;
+            // 这里的"自家窗口就弹回本机"判定已于 v1.6.9 移除 ——
+            // 设置页一旦打开，它就**永远**是前台窗口，于是用户刚把鼠标推到对端、下一帧就被
+            // 判成"前台是自家界面"、立刻弹回，实测 8 毫秒一个来回（见 mb-20261013.log
+            // 的 00:45:34~00:45:42 那段），主观感受就是"打开设置页后软件卡住了、跳不过去"。
+            // 远控期间想操作本机界面，走 Ctrl+Alt+1 或把鼠标推回返回侧边缘即可。
+            if (BugOwnWindow && Native.IsOwnProcessForeground())
             {
                 SwitchToLocal();
                 return;
@@ -1394,9 +1419,12 @@ public class Orchestrator : IDisposable
             var cd = _clientDisp;
             _cx = MathX.Clamp(_cx, cd.X, cd.X + cd.W - 1);
             _cy = MathX.Clamp(_cy, cd.Y, cd.Y + cd.H - 1);
-
             // 回程：只要指针贴到"返回侧"边缘就放回本机。原先要求 _armedBack（先离开边缘
             // 4px 才武装）再精确命中 1.5px 边缘，实际几乎不可能命中，用户感觉"回不去"。
+            // 宽限 300ms：刚进场时 _cx 就停在返回边缘（cd.X）且"进场即武装"，
+            // 此时切换动作自身产生的零增量鼠标事件（SetCursorPos 到屏幕中心）会
+            // 立刻命中回程判定、把控制权弹回本机 —— 用户"慢慢蹭过边缘"时必现
+            // "推过去又弹回来"。给 300ms 让第一个有效位移先把 _cx 推离边缘。
             bool atBackEdge = _sessionSide switch
             {
                 "right" => _cx <= cd.X + 1.5,
@@ -1405,7 +1433,16 @@ public class Orchestrator : IDisposable
                 "bottom" => _cy <= cd.Y + 1.5,
                 _ => false,
             };
-            if (atBackEdge && _armedBack && !PeerDragActive && !LockToScreen && !_dropHandover)
+            // 宽限期内不累计：切换瞬间残留的输入事件会和中心钳位拉扯，
+            // 若让它们预支去抖计数，宽限一过就立刻弹回，去抖就白做了。
+            // 另要求本帧位移"像人手"（单帧 ≤120px）：外力瞬移（其他程序 SetCursorPos、
+            // 远程桌面改分辨率、虚拟机同步光标）会造成上千像素的假位移，人手再快
+            // 也达不到 —— 瞬移帧不得参与回程计数，否则会被误判成"用户贴边想回来"。
+            bool humanStep = Math.Abs(dx) <= 120 && Math.Abs(dy) <= 120;
+            _backEdgeHits = atBackEdge && humanStep && Monotonic.Ms - _remoteEnterMs >= 300
+                ? _backEdgeHits + 1 : 0;
+            if (atBackEdge && _backEdgeHits >= 4 && _armedBack && Monotonic.Ms - _remoteEnterMs >= 300
+                && !PeerDragActive && !LockToScreen && !_dropHandover)
             { SwitchToLocal(); return; }
             // 离边缘超过 6px 就武装返回（进远端时已置 true，无需先"离开"一次）
             if (!atBackEdge && DistanceFromBackEdge(cd) > 6) _armedBack = true;
@@ -1538,7 +1575,10 @@ public class Orchestrator : IDisposable
         {
             // —— 反向接管中：和主控端一样，把物理光标钉在中心，按增量推远端坐标 ——
             if (_clientDisp.W <= 0) return;
-            if (Native.IsOwnProcessForeground()) { SwitchToLocal(); return; }
+            // 同上：确认弹窗开着时鼠标归本机（v1.6.9）。
+            if (_askOpen) return;
+            // 同上（v1.6.9）：反向接管期间也不再按"前台是自家窗口"强制弹回，理由一致。
+            if (BugOwnWindow && Native.IsOwnProcessForeground()) { SwitchToLocal(); return; }
             ClampPhysicalCursorToCenter();
             _cx += dx; _cy += dy;
             var cd = _clientDisp;
@@ -1553,7 +1593,16 @@ public class Orchestrator : IDisposable
                 "bottom" => _cy <= cd.Y + 1.5,
                 _ => false,
             };
-            if (atBackEdge && _armedBack && !LockToScreen && !_dropHandover) { SwitchToLocal(); return; }
+            // 宽限期内不累计：切换瞬间残留的输入事件会和中心钳位拉扯，
+            // 若让它们预支去抖计数，宽限一过就立刻弹回，去抖就白做了。
+            // 另要求本帧位移"像人手"（单帧 ≤120px）：外力瞬移（其他程序 SetCursorPos、
+            // 远程桌面改分辨率、虚拟机同步光标）会造成上千像素的假位移，人手再快
+            // 也达不到 —— 瞬移帧不得参与回程计数，否则会被误判成"用户贴边想回来"。
+            bool humanStep = Math.Abs(dx) <= 120 && Math.Abs(dy) <= 120;
+            _backEdgeHits = atBackEdge && humanStep && Monotonic.Ms - _remoteEnterMs >= 300
+                ? _backEdgeHits + 1 : 0;
+            if (atBackEdge && _backEdgeHits >= 4 && _armedBack && Monotonic.Ms - _remoteEnterMs >= 300
+                && !LockToScreen && !_dropHandover) { SwitchToLocal(); return; }
             if (!atBackEdge && DistanceFromBackEdge(cd) > 6) _armedBack = true;
 
             double nx = (_cx - cd.X) / Math.Max(1, cd.W - 1);
@@ -1651,11 +1700,13 @@ public class Orchestrator : IDisposable
             try
             {
                 var w = new AskWindow(who, "请求反向控制本机鼠标键盘", 45, reverse: true);
-                w.Answer.ContinueWith(t => tcs.TrySetResult(t.Result), TaskScheduler.Default);
+                w.Answer.ContinueWith(t => { _askOpen = false; tcs.TrySetResult(t.Result); }, TaskScheduler.Default);
+                _askOpen = true;   // 同连接确认窗：弹窗开着 → 放行本机鼠标
                 w.Show();
             }
             catch (Exception ex)
             {
+                _askOpen = false;
                 Log.Error("弹出反向控制确认窗失败，按拒绝处理", ex);
                 tcs.TrySetResult(false);
             }
@@ -1735,6 +1786,7 @@ public class Orchestrator : IDisposable
         RemoteActive = true;
         _hook.Mode = HookMode.Capture;
         _armedOut = false; _armedBack = false; _edgeSince = 0;
+        _remoteEnterMs = Monotonic.Ms;
 
         double nyN = vs.H > 0 ? (serverY - vs.Y) / (double)vs.H : 0.5;
         _cx = cd.X;
@@ -1897,6 +1949,12 @@ public class Orchestrator : IDisposable
             }
         }
 
+        // 远控中、前台是本程序自己的窗口（例如用户开着设置页又跳到了对端）：
+        // 按键归本机，不再转发给对端。否则会出现"在自家输入框里打一行字，对端那边也跟着
+        // 打一遍"的双投 —— 钩子那边为了让自家窗口能打字是不吞按键的（LetThroughOwnWindows）。
+        // 必须放在热键分支**之后**：Ctrl+Alt+L/D 等远控热键要优先就地生效，不能被这里拦掉。
+        if (Native.IsOwnProcessForeground()) return;
+
         PostMsg(new Msg { T = "key", Vk = vk, Scan = scan, Ext = ext, Down = down });
     }
 
@@ -2040,6 +2098,15 @@ public class Orchestrator : IDisposable
     long _localClipMs = -100000;
     long _remoteClipMs = -100000;
 
+    /// <summary>进入远端控制的时刻。回程判定有 300ms 宽限（见 OnHookMouseMove）。</summary>
+    long _remoteEnterMs;
+
+    /// <summary>回程边缘的连续命中帧数（去抖）。
+    /// 切换瞬间残留的输入事件会和"物理光标钳回中心"互相拉扯，_cx 会被打回返回边缘
+    /// 一两帧 —— 单帧命中就弹回会造成"推过去又弹回来"。连续 4 帧都贴在返回边缘
+    /// 才认定是用户真的要回来（真实回程动作贴住边缘时约 100~150ms 即触发）。</summary>
+    int _backEdgeHits;
+
     long ClipStamp() => Math.Max(0, Monotonic.Ms - _linkStartMs);
 
     async void OnClipboardChanged(ClipContent c)
@@ -2054,6 +2121,7 @@ public class Orchestrator : IDisposable
             _localClipMs = ClipStamp();
             _lastLocalClip = c;                     // 供对端 clip_req 时重发
             await PushClipAsync(c, _localClipMs);
+            _clip.MarkSent(c);                      // 断乒乓：这份内容推出去后，写回来的回声别再当新复制
         }
         catch (Exception ex) { Log.Error("同步剪贴板失败", ex); }
     }
@@ -2652,7 +2720,6 @@ public class Orchestrator : IDisposable
     {
         if (DebugHaloMode) return;
         var v = BuildView();
-
         if (v.State != _lastIndState)
         {
             _lastIndState = v.State;

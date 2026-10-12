@@ -6,7 +6,7 @@ namespace MouseBridge.Core;
 public static class AppInfo
 {
     public const string Name = "MouseBridge";
-    public const string Version = "1.6.8";
+    public const string Version = "1.6.9";
     public const string Title = "鼠下快传 MouseBridge";
 
     /// <summary>关于页展示的作者信息。</summary>
