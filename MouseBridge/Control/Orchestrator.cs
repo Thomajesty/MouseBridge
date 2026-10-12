@@ -216,6 +216,9 @@ public class Orchestrator : IDisposable
         _hook.Mode = HookMode.Monitor;
         LastConnectError = "";
         Interlocked.Exchange(ref _attemptIdx, 0);
+        // 用户主动重连 = 一次**新的邀请**，解除"对方拒绝过"的暂停闸门。
+        // 这是"拒绝一次后不再重复被邀请，除非再次被邀请"里的那个"再次被邀请"。
+        _declinedByPeer = false;
 
         // 会话级状态统一归零（含反向控制四件套、注入键补抬起、屏幕几何等）。
         // 以前这里只清了一半，剩下的（_revAllowed/_revGranted/ReverseControlled/LockToScreen…）
@@ -496,9 +499,16 @@ public class Orchestrator : IDisposable
                         _lastTarget = host + ":" + port;
                         _lastAttemptTick = Monotonic.Ms;
                         Log.Info($"连接对端 {host}:{port} …");
-                        // 3.5s 连不上就换下一轮（默认 TCP 超时要 20 多秒，白等）
+                        // 这个超时**只管 TCP 建连**，管不到握手 —— 别误读：
+                        // 下面 tCts 只作用在 ConnectAsync（WithToken 等待的那个 Task）上，
+                        // HandshakeAsync 用的是它自己内部的两段超时（认证 6s / 等待人工确认
+                        // SecureLink.ConfirmWaitMs）。所以这里的秒数与"对方要问多久"无关。
+                        //
+                        // （曾一度以为是外层 3.5s 掐死了对方的确认等待、从而导致反复重连，
+                        //   实测发现不成立：把延长去掉、让对端犹豫 9 秒，照样一次连上。
+                        //   真正让地址来回跳的是候选列表里混进了自动发现的地址，见 Targets()。）
                         using var tCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                        tCts.CancelAfter(3500);
+                        tCts.CancelAfter(TcpReadyWaitMs);
                         var link = await SecureLink.ConnectAsync(host, port, Cfg.TlsEnabled).WithToken(tCts.Token);
                         var ok = await link.HandshakeAsync(false, Cfg.Password, MyName, "", MyDisp(), Cfg.PeerSide,
                             Cfg.Role, Environment.MachineName,
@@ -507,7 +517,11 @@ public class Orchestrator : IDisposable
                             onPeerAsking: () =>
                             {
                                 WaitConfirmPeer = link.Peer.Name.Length > 0 ? link.Peer.Name : host;
-                                Log.Info("对端要求人工确认，已提示用户等待");
+                                Log.Info("对端正在征求它本机用户的确认，等待中");
+                                // 防御性放宽：目前这行不起作用（见上方 TcpReadyWaitMs 处的说明，
+                                // 外层 token 传不进 HandshakeAsync）。保留它是为了将来一旦把 token
+                                // 接进握手流程，不会因为外层还是 3.5 秒而把对方的确认窗口掐断。
+                                tCts.CancelAfter(PeerConfirmWaitMs);
                                 OnUiHint?.Invoke();
                             });
                         WaitConfirmPeer = "";
@@ -517,7 +531,29 @@ public class Orchestrator : IDisposable
                             // 把"为什么连不上"讲清楚：密码不对 / 对方拒绝 / 对方没启动服务
                             Log.Warn($"连接 {host}:{port} 未成功：{link.LastError}");
                             LastConnectError = link.LastError;
+                            bool declined = link.PeerDeclined;
                             link.Close();
+
+                            if (declined && Environment.GetEnvironmentVariable("MB_BUG_NO_DECLINE_GATE") != "1")
+                            {
+                                // 对方**用户**明确点了「拒绝」。
+                                //
+                                // 这时必须停下自动重连，而不是换地址继续试：轮换重试会让对方
+                                //（只要它开着「连接需确认」）被确认框一遍遍弹出来 —— 这正是
+                                // 用户反馈的"拒绝一次后还一直被邀请"。
+                                // 尊重对方的选择，等本机用户重新点「连接」再发起
+                                //（ApplyConfig / ReconnectNow 会清掉这个闸门）。
+                                _declinedByPeer = true;
+                                LastConnectError = "对方拒绝了本次连接。已停止自动重连，确认无误后点「连接」重试。";
+                                Log.Info("对方拒绝连接 → 暂停自动重连，等待用户手动重试");
+                                OnUiHint?.Invoke();
+
+                                // 原地挂住：不轮换地址、不去敲对方的门，直到用户重新发起
+                                while (_declinedByPeer && !ct.IsCancellationRequested)
+                                    await DelayConnect(1000, ct);
+                                continue;
+                            }
+
                             NextAttempt();                  // 换下一个候选地址再试
                             await DelayConnect(2500, ct);
                             continue;
@@ -569,6 +605,9 @@ public class Orchestrator : IDisposable
     public void ReconnectNow()
     {
         Log.Info("手动触发重新连接");
+        // 用户主动发起 = 新的邀请：解除"被对方拒绝"的暂停闸门，并从头轮候选地址。
+        _declinedByPeer = false;
+        Interlocked.Exchange(ref _attemptIdx, 0);
         _connectKick.Set();
     }
 
@@ -596,6 +635,28 @@ public class Orchestrator : IDisposable
 
     int _attemptIdx;
 
+    /// <summary>
+    /// **TCP 建连**的等待上限（不含握手）。对端不在线 / 端口没开时几秒就能判断出来，
+    /// 不必按 TCP 默认的 20 多秒干等。
+    /// </summary>
+    const int TcpReadyWaitMs = 3500;
+
+    /// <summary>
+    /// 防御性上界：**当前不生效**（外层 token 传不进 HandshakeAsync，详见 ClientLoop 里的说明）。
+    /// 真实起作用的是 <c>SecureLink.ConfirmWaitMs</c>，以及它必须大于 <c>AskUserConfirm</c>
+    /// 给用户的时间 —— 那才是三方时长里真正需要保证的一环。
+    /// </summary>
+    const int PeerConfirmWaitMs = 80000;
+
+    /// <summary>
+    /// 对方用户明确拒绝过本次连接，自动重连已暂停。
+    ///
+    /// 由 <c>ClientLoop</c> 在收到"被拒绝"时置位；用户重新点「连接」/「立即重连」时清除。
+    /// 存在的意义：被拒绝之后继续自动轮换重试，会让对方（开着「连接需确认」时）
+    /// 被确认框反复弹出来 —— 那是打扰，不是健壮。
+    /// </summary>
+    volatile bool _declinedByPeer;
+
     /// <summary>把候选下标推进到下一个（线程安全）。</summary>
     void NextAttempt() => Interlocked.Increment(ref _attemptIdx);
 
@@ -611,7 +672,25 @@ public class Orchestrator : IDisposable
         var list = new List<(string host, int port)>();
 
         var manual = ParseManualTarget();
-        if (manual != null) list.Add(manual.Value);
+        if (manual != null)
+        {
+            // 用户手填了地址 = **明确指定**目标，就只用它，不再掺入自动发现的结果。
+            //
+            // 以前这里还会把扫到/发现到的地址追加在后面，配合 ResolveTarget 的"轮换"，
+            // 结果就是：用户明明填了 192.168.31.228，界面却在 31.228 与自动发现的
+            // 192.168.1.2 之间来回跳 —— 用户看到的是"我填的地址被改掉了"，非常困惑。
+            // 手填优先于自动发现，这是最基本的预期。
+            //
+            // 顺带一个好处：list 只有一项时 ResolveTarget 的 idx % count 恒为 0，
+            // 手填的地址不会被"轮换"跳过。
+            list.Add(manual.Value);
+            // MB_BUG_MIX_DISCOVERED=1 时不 return，沿用旧版"继续追加发现结果"的行为，
+            // 用来证明 decline_test.py 用例 2 确实能抓到它（防止测试假通过）。
+            if (Environment.GetEnvironmentVariable("MB_BUG_MIX_DISCOVERED") == "1")
+                Log.Warn("[测试钩子] 手填地址后仍混入发现结果（复现旧缺陷）");
+            else
+                return list;
+        }
 
         if (Cfg.AutoDiscover)
         {
@@ -873,6 +952,17 @@ public class Orchestrator : IDisposable
     /// <summary>界面提示有变化（等待确认、连接阶段变化）时触发，让设置页立刻刷新。</summary>
     public event Action? OnUiHint;
 
+    /// <summary>最近一次被本机用户拒绝的对端（"地址|名字"）与时刻，用于拒绝静默窗口。</summary>
+    string _lastDeclinedKey = "";
+    long _lastDeclinedAt = -100000;
+    readonly object _declineGate = new();
+
+    /// <summary>
+    /// 刚拒绝过同一对端时，这段时间内不再弹确认框。
+    /// 15 秒足够挡住对端 2~3 秒一次的重试风暴，又不至于妨碍用户想清楚后手动重连。
+    /// </summary>
+    const long DeclineSilenceMs = 15000;
+
     /// <summary>
     /// 被控端：对端密码验证通过后，问本机用户是否允许。
     /// 关闭「每次连接需确认」或服务已停止时直接给结论，不弹窗。
@@ -898,13 +988,40 @@ public class Orchestrator : IDisposable
             await Task.Delay(150);
             return allow;
         }
+        // 支持 MB_AUTO_CONFIRM=<毫秒数>：先等这么久再允许，模拟"用户反复看了一阵才点允许"。
+        //
+        // 没有这个就没法覆盖真正出问题的那条路径 —— 用 allow/deny 立刻作答的话，
+        // 握手在几百毫秒内就结束了对丝权利要求就结束了，压根碰不到"等待窗口够不够长"这件事。
+        // 而真实场景里人类往往要十几秒到几十秒才点，旧版 3.5 秒一刀切正是在这里翻车的。
+        if (auto != null && int.TryParse(auto, out int waitMs) && waitMs > 0)
+        {
+            Log.Info($"测试模式（MB_AUTO_CONFIRM={waitMs}ms）：模拟用户犹豫 {waitMs} 毫秒后允许");
+            await Task.Delay(waitMs);
+            return true;
+        }
+
+        // —— 拒绝静默窗口：别被对端的"重试风暴"刷屏 ——
+        //
+        // 对端（尤其是还在自动重试的一方）连不上时每隔 2~3 秒就会重连一次，每次都走到
+        // 这里 → 确认框一个接一个弹出来，用户根本点不过来，观感就是"拒绝了还一直来问"。
+        // 刚拒绝过同一对端时直接静默拒绝；过了窗口再放行（用户可能改主意了）。
+        var key = link.RemoteAddress + "|" + (link.Peer.Name ?? "");
+        lock (_declineGate)
+        {
+            if (key == _lastDeclinedKey && Monotonic.Ms - _lastDeclinedAt < DeclineSilenceMs)
+            {
+                Log.Info($"{(Monotonic.Ms - _lastDeclinedAt) / 1000.0:F0} 秒前刚拒绝过 {key}，" +
+                         "本次静默拒绝（不再弹窗）");
+                return false;
+            }
+        }
 
         var tcs = new TaskCompletionSource<bool>();
         UiUtil.Run(() =>
         {
             try
             {
-                var w = new AskWindow(link.Peer.Name, link.RemoteAddress);
+                var w = new AskWindow(link.Peer.Name ?? "", link.RemoteAddress);
                 w.Answer.ContinueWith(t => tcs.TrySetResult(t.Result), TaskScheduler.Default);
                 w.Show();
                 Log.Info($"已弹出连接确认窗（来自 {link.Peer.Name} {link.RemoteAddress}）");
@@ -915,9 +1032,24 @@ public class Orchestrator : IDisposable
                 tcs.TrySetResult(false);
             }
         });
+
+        // 变量名不能叫 allow —— 上面测试模式分支里已经有一个同名的了，
+        // C# 不允许内层与外层同名（哪怕外层声明在后面）。
+        bool accepted;
         var done = await Task.WhenAny(tcs.Task, Task.Delay(70000));
-        if (done != tcs.Task) { Log.Warn("本机用户一直没回应，按拒绝处理"); return false; }
-        return await tcs.Task;
+        if (done != tcs.Task)
+        {
+            Log.Warn("本机用户一直没回应，按拒绝处理");
+            accepted = false;
+        }
+        else accepted = await tcs.Task;
+
+        if (!accepted)
+        {
+            // 记下来：接下来 DeclineSilenceMs 内对同一对端不再弹窗
+            lock (_declineGate) { _lastDeclinedKey = key; _lastDeclinedAt = Monotonic.Ms; }
+        }
+        return accepted;
     }
 
     /// <summary>
