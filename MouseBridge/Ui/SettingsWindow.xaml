@@ -1,0 +1,818 @@
+﻿<Window x:Class="MouseBridge.Ui.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="鼠下快传 MouseBridge"
+        Width="800" Height="700" MinWidth="720" MinHeight="560"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
+        WindowStyle="None" Background="{StaticResource BgBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" FontFamily="{StaticResource UiFont}">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" CornerRadius="0"
+                      GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===== 标题栏 ===== -->
+        <Grid Grid.Row="0" Background="{StaticResource BgBrush}">
+            <StackPanel Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+                <Image x:Name="ImgAppIcon" Width="20" Height="20" VerticalAlignment="Center"/>
+                <TextBlock Text="鼠下快传" FontSize="14" FontWeight="SemiBold" Margin="9,0,0,0"
+                           VerticalAlignment="Center"/>
+                <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
+                        VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtVersion" Text="v1.6.4" FontSize="11" Foreground="{StaticResource AccentBrush}"/>
+                </Border>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <!-- 系统按钮用矢量路径画：这台机器的 Segoe Fluent Icons 解析不出 Chrome* 字形，
+                     图标字体渲染出来是方框（旧版一直如此），路径则任何系统都稳定 -->
+                <Button x:Name="BtnMin" Style="{StaticResource CaptionButton}" Click="BtnMin_Click" ToolTip="最小化">
+                    <Path Data="M 0,0 H 10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1"/>
+                </Button>
+                <Button x:Name="BtnMax" Style="{StaticResource CaptionButton}" Click="BtnMax_Click" ToolTip="最大化">
+                    <Grid>
+                        <Path x:Name="IcoMax" Data="M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1"/>
+                        <Path x:Name="IcoRestore" Data="M 2.5,0.5 H 9.5 V 7.5 H 6.5 M 6.5,2.5 H 0.5 V 9.5 H 5.5"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1" Visibility="Collapsed"/>
+                    </Grid>
+                </Button>
+                <Button x:Name="BtnClose" Style="{StaticResource CaptionCloseButton}" Click="BtnClose_Click"
+                        ToolTip="关闭到托盘">
+                    <Path Data="M 0,0 L 10,10 M 10,0 L 0,10"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.1"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- ===== 状态条 ===== -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="12,0,12,10" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="{StaticResource Text3Brush}"
+                             VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtStatus" Text="状态：启动中…" FontWeight="SemiBold" Margin="8,0,0,0"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtDetail" Text="" Foreground="{StaticResource Text3Brush}" FontSize="11"
+                               Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    <!-- 连接/等确认时显示，让"正在忙"这件事一眼可见 -->
+                    <ProgressBar x:Name="PbBusy" Width="66" Height="4" IsIndeterminate="True" Visibility="Collapsed"
+                                 Margin="10,0,0,0" VerticalAlignment="Center" Background="Transparent"
+                                 BorderThickness="0" Foreground="{StaticResource AccentBrush}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 连接失败时出现：一键把诊断信息（版本/角色/地址/密码是否设置/最近错误/日志尾部）
+                         复到剪贴板，用户遇到"连不上"时不用再去翻日志文件 -->
+                    <Button x:Name="BtnDiag" Content="复制诊断" Style="{StaticResource GhostIconButton}"
+                            Width="Auto" Padding="8,0" FontSize="11" Visibility="Collapsed"
+                            Click="BtnDiag_Click" ToolTip="把连接诊断信息复制到剪贴板"/>
+                    <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="9" Padding="8,2" Margin="5,0,0,0">
+                        <TextBlock x:Name="TxtMeChip" Text="本机" FontSize="11" Foreground="{StaticResource AccentBrush}"/>
+                    </Border>
+                    <Border Background="#EDEFF2" CornerRadius="9" Padding="8,2" Margin="5,0,0,0">
+                        <TextBlock x:Name="TxtPeerChip" Text="对端未连接" FontSize="11"
+                                   Foreground="{StaticResource Text2Brush}"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ===== 主体 ===== -->
+        <Grid Grid.Row="2" Margin="12,0,12,0">
+            <TabControl x:Name="MainTabs">
+
+                <!-- ========== 连接 ========== -->
+                <TabItem Header="连接">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" BorderBrush="{StaticResource AccentSoftBrush}">
+                                <StackPanel>
+                                    <!-- 第 1 排：本机角色（两种角色配色区分）+ 本机地址 + 热键，精简成一行 -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="58"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="本机角色" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <!-- 主控端＝青蓝，被控端＝紫；选中态各自用角色色，一眼分得清 -->
+                                            <RadioButton x:Name="RbServer" GroupName="role" Content="主控端"
+                                                         Style="{StaticResource RoleServerRadio}"
+                                                         Click="Role_Changed"
+                                                         ToolTip="键鼠在这台，由这台去连对方"/>
+                                            <RadioButton x:Name="RbClient" GroupName="role" Content="被控端"
+                                                         Style="{StaticResource RoleClientRadio}"
+                                                         Margin="16,0,0,0"
+                                                         Click="Role_Changed"
+                                                         ToolTip="在这台启动服务，等主控端连进来"/>
+                                        </StackPanel>
+                                        <!-- 地址与热键并到同一行右端，不再单独占一大块空白 -->
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock x:Name="TxtLocalIpsInline" Style="{StaticResource Hint}"
+                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                       MaxWidth="230"/>
+                                            <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="4"
+                                                    Padding="6,2" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                    ToolTip="鼠标滑到屏幕边缘即可跨机；热键在本机就地生效">
+                                                <TextBlock x:Name="TxtHotkeyChip" Text="Ctrl+Alt+2 过去 · 1 回来 · D 暂停"
+                                                           FontSize="11"
+                                                           Foreground="{StaticResource AccentBrush}"/>
+                                            </Border>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Separator/>
+
+                                    <!-- 第 2 排：本机名称（占满余量）+ 连接密码 + 明文/生成 -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="58"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="本机名称" VerticalAlignment="Center"/>
+                                        <Grid Grid.Column="1" Margin="0,0,18,0">
+                                            <TextBox x:Name="TbMachineName" Height="32"
+                                                     VerticalContentAlignment="Center"
+                                                     GotKeyboardFocus="TbMachineName_GotFocus"
+                                                     LostKeyboardFocus="TbMachineName_LostFocus"/>
+                                            <TextBlock x:Name="TxtNameWatermark" Text="（点击修改）" FontSize="11"
+                                                       Foreground="{StaticResource Text3Brush}"
+                                                       HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                       Margin="0,0,8,0" IsHitTestVisible="False"/>
+                                        </Grid>
+                                        <TextBlock Grid.Column="2" Text="连接密码" VerticalAlignment="Center"
+                                                   Margin="0,0,10,0"/>
+                                        <Grid Grid.Column="3">
+                                            <!-- PasswordBox 负责遮字，TextBox 负责明文，二者原位叠放、
+                                                 用「显示」按钮切换，位置与宽度完全一致 -->
+                                            <PasswordBox x:Name="PbPassword" Width="150" Height="32"
+                                                         VerticalContentAlignment="Center"
+                                                         PasswordChanged="PbPassword_Changed"
+                                                         ToolTip="两台必须一致；只用数字，方便照着输入"/>
+                                            <TextBox x:Name="TbPasswordPlain" Width="150" Height="32"
+                                                     VerticalContentAlignment="Center" Visibility="Collapsed"
+                                                     TextChanged="TbPasswordPlain_Changed"
+                                                     ToolTip="两台必须一致；只用数字，方便照着输入"/>
+                                        </Grid>
+                                        <Button x:Name="BtnPwdEye" Grid.Column="4" Content="显示" Height="32"
+                                                MinHeight="32" Padding="10,0" Margin="6,0,0,0"
+                                                Click="BtnPwdEye_Click" ToolTip="在明文/隐藏之间切换"/>
+                                        <Button x:Name="BtnGenPwd" Grid.Column="5" Content="生成" Height="32"
+                                                MinHeight="32" Padding="14,0" Margin="6,0,0,0"
+                                                Click="BtnGenPwd_Click"
+                                                ToolTip="随机生成 8 位数字密码，照着填到另一台即可"/>
+                                    </Grid>
+
+                                    <Separator/>
+
+                                    <!-- 第 3 排：按角色原位替换。两个视图同高，切换不会把下面的框顶跑。
+                                         高度必须容得下"地址行 32 + 提示行（含 CheckBox 约 20）"，
+                                         给太小会把第二行整个裁掉（表现为开关根本不显示）。 -->
+                                    <Grid Height="72">
+                                        <!-- 主控端 -->
+                                        <StackPanel x:Name="ViewServer" VerticalAlignment="Center">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="58"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="对端地址" VerticalAlignment="Center"/>
+                                                <TextBox x:Name="TbPeerHost" Grid.Column="1" Height="32"
+                                                         VerticalContentAlignment="Center"/>
+                                                <Button x:Name="BtnScan" Grid.Column="2" Content="扫描" Height="32"
+                                                        MinHeight="32" Padding="16,0" Margin="6,0,0,0"
+                                                        Click="BtnScan_Click"
+                                                        ToolTip="同网段用广播找；跨路由器会依次扫常见私网段（约 10 秒）"/>
+                                                <Button x:Name="BtnConnect" Grid.Column="3" Content="连接" Height="32"
+                                                        MinHeight="32" Padding="22,0" Margin="6,0,0,0"
+                                                        Style="{StaticResource AccentButton}" Click="BtnConnect_Click"/>
+                                            </Grid>
+                                            <Grid Margin="60,5,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Style="{StaticResource Hint}"
+                                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                                           Text="填对方 IP 点「连接」；不知道对方 IP 就点「扫描」，扫到的会自动填上。"/>
+                                                <!-- 「允许被控端控制」许可：被控端可反过来操作本机键鼠。
+                                                     放在主控端一侧，因为它决定"要不要把本机交出去"。 -->
+                                                <CheckBox x:Name="CbAllowReverse" Grid.Column="1"
+                                                          Margin="12,0,0,0" VerticalAlignment="Center"
+                                                          Content="允许被控端控制"
+                                                          Click="CbAllowReverse_Click"
+                                                          ToolTip="开启后被控端可以申请反过来控制本机鼠标键盘；控制权始终由「哪个鼠标在动」决定，你一动手就收回"/>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- 被控端 -->
+                                        <StackPanel x:Name="ViewClient" VerticalAlignment="Center" Visibility="Collapsed">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="58"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="本机地址" VerticalAlignment="Center"/>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                            VerticalAlignment="Center">
+                                                    <Ellipse x:Name="SvcDot" Width="9" Height="9"
+                                                             VerticalAlignment="Center"
+                                                             Fill="{StaticResource Text3Brush}"/>
+                                                    <TextBlock x:Name="TxtSvcAddr" Margin="8,0,0,0" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock x:Name="TxtSvcState" Margin="10,0,0,0"
+                                                               Foreground="{StaticResource Text3Brush}"
+                                                               VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <Button x:Name="BtnServiceStart" Grid.Column="2" Content="启动服务"
+                                                        Height="32" MinHeight="32" Padding="20,0"
+                                                        Style="{StaticResource AccentButton}"
+                                                        Click="BtnService_Click"
+                                                        ToolTip="启动后主控端填上面的地址就能连进来"/>
+                                                <Button x:Name="BtnServiceStop" Grid.Column="3" Content="关闭"
+                                                        Height="32" MinHeight="32" Padding="20,0" Margin="6,0,0,0"
+                                                        Visibility="Collapsed"
+                                                        Click="BtnService_Click"
+                                                        ToolTip="停止服务，新的连接会被拒绝"/>
+                                            </Grid>
+                                            <Grid Margin="60,5,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="TxtSvcHint" Style="{StaticResource Hint}"
+                                                           TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                                <!-- 被控端侧只做状态显示：许可由主控端给，这里不能自己开 -->
+                                                <Border x:Name="RevBadge" Grid.Column="1" Margin="12,0,0,0"
+                                                        CornerRadius="4" Padding="7,3" VerticalAlignment="Center"
+                                                        Background="{StaticResource ControlBrush}"
+                                                        BorderBrush="{StaticResource LineStrongBrush}"
+                                                        BorderThickness="1" Visibility="Collapsed">
+                                                    <TextBlock x:Name="TxtRevBadge" FontSize="11"
+                                                               Foreground="{StaticResource Text2Brush}"/>
+                                                </Border>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- 常驻提示条（C4）：连上之后给一句"当前该怎么操作"的即时说明。
+                                         以前这些只在状态栏一行挤着，用户往往看不见。
+                                         未连接时整条收起来，不占地方。 -->
+                                    <Border x:Name="BarLiveHint" Margin="0,8,0,0" CornerRadius="6"
+                                            Padding="10,7" Visibility="Collapsed"
+                                            Background="{StaticResource AccentSoftBrush}"
+                                            BorderBrush="{StaticResource AccentBrush}"
+                                            BorderThickness="1">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock x:Name="TxtLiveHint" TextWrapping="Wrap"
+                                                       Foreground="{StaticResource AccentDeepBrush}"
+                                                       VerticalAlignment="Center"/>
+                                            <Button x:Name="BtnLiveHintAction" Content="回到本机" Margin="10,0,0,0"
+                                                    Padding="10,2" MinHeight="24" VerticalAlignment="Center"
+                                                    Visibility="Collapsed" Click="BtnLiveHintAction_Click"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Separator/>
+
+                                    <!-- 扫描发现（主控端）/ 操作提示（被控端），两态原位替换 -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="58"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="TxtFindLabel" Text="扫描发现" VerticalAlignment="Top"
+                                                   Margin="0,6,0,0"/>
+                                        <StackPanel x:Name="DiscoverPanel" Grid.Column="1">
+                                            <ListBox x:Name="LbDiscovered" Height="58"
+                                                     MouseDoubleClick="LbDiscovered_DoubleClick"/>
+                                            <TextBlock x:Name="TxtScanStatus" Style="{StaticResource Hint}"
+                                                       Margin="0,5,0,0" Text="还没扫描。" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <!-- 被控端：不扫描主控端 IP，这里只给出操作三步 -->
+                                        <StackPanel x:Name="ClientTipPanel" Grid.Column="1" Visibility="Collapsed">
+                                            <Border Background="{StaticResource RoleClientSoftBrush}"
+                                                    CornerRadius="6" Padding="10,8" MinHeight="58">
+                                                <StackPanel>
+                                                    <TextBlock Text="被控端不需要扫描主控端地址。"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource RoleClientBrush}"/>
+                                                    <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                                               TextWrapping="Wrap"
+                                                               Text="① 输入连接密码 → ② 点「启动服务」→ ③ 把本机地址告诉主控端。主控端连接时这台会弹窗确认。"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <TextBlock x:Name="TxtClientStatus" Style="{StaticResource Hint}"
+                                                       Margin="0,5,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <!-- 更多设置：收起来，免得连接页太挤 -->
+                                    <Expander Margin="0,6,0,0">
+                                        <Expander.Header>
+                                            <TextBlock Text="更多设置" Foreground="{StaticResource Text2Brush}"/>
+                                        </Expander.Header>
+                                        <StackPanel Margin="2,8,0,0">
+                                            <WrapPanel Orientation="Horizontal">
+                                                <CheckBox x:Name="CbConfirm" Content="有人连进来时先问我"
+                                                          VerticalAlignment="Center" Margin="0,0,18,0"
+                                                          ToolTip="密码正确也先弹窗确认一次，避免被同网段的人悄悄接管"/>
+                                                <CheckBox x:Name="CbTls" Content="TLS 加密" VerticalAlignment="Center"
+                                                          Margin="0,0,18,0"
+                                                          ToolTip="跨公网建议开；局域网可关"/>
+                                                <CheckBox x:Name="CbAutoDiscover" Content="自动发现"
+                                                          VerticalAlignment="Center"
+                                                          ToolTip="同网段内互相广播，找到就自动连"/>
+                                            </WrapPanel>
+                                            <WrapPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <TextBlock Text="TCP 端口" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0"/>
+                                                <TextBox x:Name="TbPort" Width="76" MinWidth="76"/>
+                                                <CheckBox x:Name="CbHotkeys" Content="跨机热键" Margin="16,0,0,0"
+                                                          VerticalAlignment="Center"
+                                                          ToolTip="关掉后仅保留「拉回本机」保命键"/>
+                                                <TextBlock Text="修饰键" VerticalAlignment="Center" Margin="10,0,6,0"/>
+                                                <ComboBox x:Name="CbHotkeyMods" Width="112" Height="28" MinHeight="28"
+                                                          VerticalAlignment="Center"
+                                                          SelectionChanged="CbHotkeyMods_SelectionChanged"
+                                                          ToolTip="热键冲突时换一套；「拉回本机」的 Ctrl+Alt+1 永远有效">
+                                                    <ComboBoxItem Content="Ctrl + Alt" Tag="CtrlAlt"/>
+                                                    <ComboBoxItem Content="Ctrl + Shift" Tag="CtrlShift"/>
+                                                    <ComboBoxItem Content="Alt + Shift" Tag="AltShift"/>
+                                                </ComboBox>
+                                                <Button x:Name="BtnReconnect" Content="立即重连" Margin="16,0,0,0"
+                                                        Click="BtnReconnect_Click"/>
+                                                <Button x:Name="BtnFirewall" Content="防火墙放行" Margin="8,0,0,0"
+                                                        Click="BtnFirewall_Click"/>
+                                            </WrapPanel>
+                                            <TextBlock x:Name="TxtHotkeyTip" Style="{StaticResource Hint}"
+                                                       Margin="0,6,0,0" TextWrapping="Wrap" Text=""/>
+                                            <!-- 被控端专用（切到主控端时隐藏）：本机在路由器后面、
+                                                 外面连不进来时，填上主控端地址让本机反过来连过去 -->
+                                            <StackPanel x:Name="RowClientDial" Orientation="Horizontal"
+                                                        Margin="0,8,0,0" Visibility="Collapsed">
+                                                <TextBlock Text="对端地址" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0"/>
+                                                <TextBox x:Name="TbPeerHostAlt" Width="176" Height="28"
+                                                         VerticalContentAlignment="Center"
+                                                         TextChanged="TbPeerHostAlt_Changed"
+                                                         ToolTip="本机在路由器/二级路由后面、外面连不进来时，填主控端地址让本机主动连过去"/>
+                                                <TextBlock Text="（可选）本机在路由器后面时，填主控端地址，让本机主动连过去"
+                                                           Style="{StaticResource Hint}" VerticalAlignment="Center"
+                                                           Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                            <TextBlock x:Name="TxtLocalIps" Style="{StaticResource Caption}"
+                                                       Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                            <!-- 热键说明已精简到第一排那一行，这里不再重复占一大块空白 -->
+                                        </StackPanel>
+                                    </Expander>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========== 屏幕与切换 ========== -->
+                <TabItem Header="屏幕与切换">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="两台电脑怎么摆的？（点一个方位格子，告诉软件对端在你哪一边）"
+                                               Style="{StaticResource SectionTitle}"/>
+                                    <Grid HorizontalAlignment="Left" Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <Border x:Name="SlotTop" Grid.Row="0" Grid.Column="1" Width="150" Height="44"
+                                                Style="{StaticResource SlotBorder}" Tag="top" MouseLeftButtonUp="Slot_Click">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center">
+                                                <!-- 方位箭头用矢量路径：Win7 没有 Segoe Fluent/MDL2 字体，
+                                                     字形图标在那台机器上会变成方框 -->
+                                                <Path Data="M 6.5,0 L 13,6.5 H 9.2 V 13 H 3.8 V 6.5 H 0 Z"
+                                                      Fill="{StaticResource Text3Brush}" Width="13" Height="13"
+                                                      Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="对端在上方" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border x:Name="SlotLeft" Grid.Row="1" Grid.Column="0" Width="150" Height="86"
+                                                Style="{StaticResource SlotBorder}" Tag="left" MouseLeftButtonUp="Slot_Click">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center">
+                                                <Path Data="M 0,6.5 L 6.5,0 V 3.8 H 13 V 9.2 H 6.5 V 13 Z"
+                                                      Fill="{StaticResource Text3Brush}" Width="13" Height="13"
+                                                      Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="对端在左侧" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border Grid.Row="1" Grid.Column="1" Width="150" Height="86" Margin="4"
+                                                Background="{StaticResource AccentSoftBrush}"
+                                                BorderBrush="{StaticResource AccentBrush}" BorderThickness="1.6"
+                                                CornerRadius="6">
+                                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                <TextBlock x:Name="TxtMeCard" Text="本机" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="TxtLocalRes" Text="" FontSize="11"
+                                                           Foreground="{StaticResource Text3Brush}"
+                                                           HorizontalAlignment="Center" Margin="0,3,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border x:Name="SlotRight" Grid.Row="1" Grid.Column="2" Width="150" Height="86"
+                                                Style="{StaticResource SlotBorder}" Tag="right" MouseLeftButtonUp="Slot_Click">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center">
+                                                <TextBlock Text="对端在右侧" VerticalAlignment="Center"/>
+                                                <Path Data="M 13,6.5 L 6.5,13 V 9.2 H 0 V 3.8 H 6.5 V 0 Z"
+                                                      Fill="{StaticResource Text3Brush}" Width="13" Height="13"
+                                                      Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <Border x:Name="SlotBottom" Grid.Row="2" Grid.Column="1" Width="150" Height="44"
+                                                Style="{StaticResource SlotBorder}" Tag="bottom" MouseLeftButtonUp="Slot_Click">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                        VerticalAlignment="Center">
+                                                <Path Data="M 6.5,13 L 0,6.5 H 3.8 V 0 H 9.2 V 6.5 H 13 Z"
+                                                      Fill="{StaticResource Text3Brush}" Width="13" Height="13"
+                                                      Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="对端在下方" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock x:Name="TxtSideHint" Style="{StaticResource Caption}" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="切换行为" Style="{StaticResource SectionTitle}"/>
+                                    <CheckBox x:Name="CbTakeover" Content="启用鼠标跨屏接管（关掉后鼠标不再跑到对端，剪贴板/文件同步照常）"
+                                              FontWeight="SemiBold"/>
+                                    <WrapPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="鼠标顶住边缘后延迟切换" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="TbSwitchDelay" Width="70" MinWidth="70" Margin="0,0,6,0"/>
+                                        <TextBlock Text="毫秒（0=立即；200~500 可有效防误切）" VerticalAlignment="Center"
+                                                   Style="{StaticResource Hint}"/>
+                                    </WrapPanel>
+                                    <CheckBox x:Name="CbLockKey" Content="按 Scroll Lock 锁定/解锁当前屏幕" Margin="0,10,0,0"/>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                               Text="把鼠标推过两边屏幕相接的那条边就切过去；在对端把鼠标推回同一条边就回来。"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========== 剪贴板与文件 ========== -->
+                <TabItem Header="剪贴板与文件">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="剪贴板自动同步（在这台 Ctrl+C，对面直接 Ctrl+V）"
+                                               Style="{StaticResource SectionTitle}"/>
+                                    <CheckBox x:Name="CbSyncText" Content="同步文本"/>
+                                    <CheckBox x:Name="CbSyncImage" Content="同步图片"/>
+                                    <CheckBox x:Name="CbSyncFiles" Content="同步文件 / 文件夹（先传清单，对面准备好再粘贴）"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="文件接收" Style="{StaticResource SectionTitle}"/>
+                                    <CheckBox x:Name="CbEagerReceive"
+                                              Content="自动预接收（对面复制文件后立刻在后台开始传，粘的时候几乎秒到位）"
+                                              FontWeight="SemiBold"/>
+                                    <WrapPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="预接收上限" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="TbEagerCap" Width="80" MinWidth="80" Margin="0,0,6,0"/>
+                                        <TextBlock Text="MB" VerticalAlignment="Center" Margin="0,0,20,0"/>
+                                        <TextBlock Text="单次剪贴板上限" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="TbClipCap" Width="80" MinWidth="80" Margin="0,0,6,0"/>
+                                        <TextBlock Text="MB" VerticalAlignment="Center"/>
+                                    </WrapPanel>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0"
+                                               Text="超过上限的文件自动改成“按需接收”：在对面资源管理器里按 Ctrl+V 那一刻才开始传。&#10;预接收适合“复制完马上要粘”的日常场景（小文件、文档、图片）；如果你是“复制了但可能不粘”，把上限调小（如 32MB）或直接关掉更省带宽。"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="拖拽投递（像同一台电脑上两个文件夹窗口之间拖）"
+                                               Style="{StaticResource SectionTitle}"/>
+                                    <CheckBox x:Name="CbDragDrop"
+                                              Content="允许跨机拖拽：按住文件推到屏幕边缘，接着在对面拖，松手落到光标下的文件夹"
+                                              FontWeight="SemiBold"/>
+                                    <CheckBox x:Name="CbFallback"
+                                              Content="松手时不在文件夹上 —— 仍然存到下面的默认目录（取消勾选=直接放弃本次投递）"
+                                              Margin="29,6,0,0"/>
+                                    <Separator/>
+                                    <TextBlock Text="默认接收目录（没落在文件夹上时用）" Style="{StaticResource Caption}"
+                                               Margin="0,0,0,6"/>
+                                    <WrapPanel Orientation="Horizontal">
+                                        <ComboBox x:Name="CbDropDir" Width="150" SelectionChanged="CbDropDir_Changed">
+                                            <ComboBoxItem Content="桌面" Tag="Desktop"/>
+                                            <ComboBoxItem Content="下载文件夹" Tag="Downloads"/>
+                                            <ComboBoxItem Content="自定义目录…" Tag="custom"/>
+                                        </ComboBox>
+                                        <TextBox x:Name="TbDropDirCustom" Width="230" Margin="8,0,0,0"
+                                                 Visibility="Collapsed"/>
+                                        <Button x:Name="BtnPickDir" Content="浏览…" Margin="8,0,0,0"
+                                                Visibility="Collapsed" Click="BtnPickDir_Click"/>
+                                    </WrapPanel>
+                                    <CheckBox x:Name="CbOpenFolder" Content="投递完成后自动打开接收文件夹" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========== 指示器 ========== -->
+                <TabItem Header="指示器">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <!-- 预览框：左=固定尺寸的预览区（光标箭头/光环/进度弧/徽标/文字气泡全在同一个
+                                         Canvas 里按真实几何摆放，气泡紧贴光环，不挡也不飘），右=颜色含义（悬停联动）。
+                                         左右各占固定片区，切换演示时不会互相挤动。
+                                         背板用中等深度的中性灰（不是纯黑），彩色光环才读得清，也不至于太重。 -->
+                                    <Border Background="#2B3138" CornerRadius="8" Padding="14,10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="265"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <Canvas x:Name="PreviewCanvas" Grid.Column="0" Width="265" Height="92">
+                                                <!-- 光标箭头（尖角在 0,0，代码里摆到热点位置） -->
+                                                <Path x:Name="PreviewArrow"
+                                                      Data="M 0,0 L 0,16.5 L 4.2,12.8 L 6.8,18.4 L 9.6,17.1 L 7,11.6 L 12.2,11.5 Z"
+                                                      Fill="White" Stroke="#1B1F26" StrokeThickness="1.1"
+                                                      StrokeLineJoin="Round"/>
+                                                <!-- 光圈：挂在箭头右侧，与真实光环同一套几何 -->
+                                                <Ellipse x:Name="PreviewRing" Width="44" Height="44"
+                                                         Stroke="#2ECC71" StrokeThickness="4" Fill="#1AFFFFFF"/>
+                                                <Path x:Name="PreviewArc" Stroke="#22D3EE" StrokeThickness="4.5"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                      Visibility="Collapsed"/>
+                                                <Border x:Name="PreviewBadge" Width="13" Height="13"
+                                                        CornerRadius="7" Background="#FFD400"
+                                                        BorderBrush="#181C22" BorderThickness="1.4"
+                                                        Visibility="Collapsed"/>
+                                                <!-- 文字气泡：紧贴光圈右缘（间距 8），随光环尺寸一起移动 -->
+                                                <Border x:Name="PreviewPill" Background="#E81B2129" CornerRadius="7"
+                                                        Padding="8,4" Width="160" Height="42" Visibility="Collapsed">
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="PreviewTitle" Text="控制 DESKTOP-01"
+                                                                   FontSize="12" FontWeight="SemiBold"
+                                                                   Foreground="White"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock x:Name="PreviewSub" Text="移到对端边缘可返回"
+                                                                   FontSize="11" Foreground="#B6C2D0"
+                                                                   Margin="0,1,0,0"
+                                                                   TextTrimming="CharacterEllipsis"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </Canvas>
+
+                                            <Border Grid.Column="1" Width="1" Background="#33FFFFFF" Margin="10,2,10,2"/>
+
+                                            <!-- 颜色含义：3 列 11 项（4/4/3），悬停某项左侧预览即时切到该状态 -->
+                                            <Grid x:Name="LegendHost" Grid.Column="2" VerticalAlignment="Center">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,5,0,0"
+                                               Text="左边预览随下方开关/滑块即时变化，与真实光环完全一致；鼠标移到右边某个颜色上，左边就演示那个状态。"/>
+                                    <StackPanel Margin="0,10,0,0">
+                                        <CheckBox x:Name="CbIndicator" Content="显示光标光环（区分当前控制的是哪台电脑）"
+                                                  FontWeight="SemiBold" Click="CbIndicator_Click"/>
+                                        <WrapPanel Orientation="Horizontal" Margin="0,9,0,0">
+                                            <TextBlock Text="光环大小" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <Slider x:Name="SlIndicatorSize" Width="170" Minimum="20" Maximum="64"
+                                                    IsSnapToTickEnabled="True" TickFrequency="2"
+                                                    ValueChanged="SlIndicatorSize_ValueChanged"/>
+                                            <TextBlock x:Name="TxtSizeVal" Text="44" Margin="9,0,0,0"
+                                                       VerticalAlignment="Center" MinWidth="30"/>
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Hint}" Margin="0,3,0,0"
+                                                   Text="拖动滑块即时生效，不用保存。"/>
+                                        <CheckBox x:Name="CbIndicatorText" Content="光环旁显示文字状态（拖拽、投递目标、传输进度等）"
+                                                  Margin="0,8,0,0" Click="CbIndicatorText_Click"/>
+                                        <CheckBox x:Name="CbShowArc" Content="传输时在光环上叠加进度弧" Margin="0,3,0,0"
+                                                  Click="CbShowArc_Click"/>
+                                        <CheckBox x:Name="CbShowBadge" Content="显示物料徽标" Margin="0,3,0,0"
+                                                  Click="CbShowBadge_Click"/>
+                                        <Button Content="打开传输记录与运行日志…" Margin="0,11,0,0" Padding="12,5"
+                                                HorizontalAlignment="Left" Click="BtnHistory_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========== 高级 ========== -->
+                <TabItem Header="高级">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="启动" Style="{StaticResource SectionTitle}"/>
+                                    <CheckBox x:Name="CbAutoStart" Content="开机自动启动（当前用户）"/>
+                                    <CheckBox x:Name="CbAutoStartMinimized" Content="启动后不弹设置窗口，直接待在托盘"
+                                              Margin="29,4,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="诊断" Style="{StaticResource SectionTitle}"/>
+                                    <WrapPanel Orientation="Horizontal">
+                                        <TextBlock Text="日志级别" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        <ComboBox x:Name="CbLogLevel" Width="110">
+                                            <ComboBoxItem Content="Debug" Tag="Debug"/>
+                                            <ComboBoxItem Content="Info" Tag="Info"/>
+                                            <ComboBoxItem Content="Warn" Tag="Warn"/>
+                                            <ComboBoxItem Content="Error" Tag="Error"/>
+                                        </ComboBox>
+                                        <Button x:Name="BtnHistory2" Content="传输记录与运行日志…" Margin="12,0,0,0"
+                                                Click="BtnHistory_Click"/>
+                                        <Button x:Name="BtnOpenLogs" Content="打开日志文件夹" Margin="8,0,0,0"
+                                                Click="BtnOpenLogs_Click"/>
+                                        <Button x:Name="BtnResetTrust" Content="重置对端信任（证书指纹）" Margin="8,0,0,0"
+                                                Click="BtnResetTrust_Click"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="已知限制" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock Style="{StaticResource Hint}"
+                                               Text="· 键盘跟随鼠标：鼠标在哪台电脑上，这边敲的键就进哪台 —— 鼠标推到对端之后，直接打字就是打进对面（切回来会自动补发按键抬起，不会卡键）。&#10;· 注入的输入无法作用于“以管理员身份运行”的窗口（UIPI 限制）。需要远控提权窗口时，请让本软件也以管理员身份运行。&#10;· 跨机打字是原始键码转发：中文输入法请在对面电脑上切换，长中文建议走剪贴板。&#10;· 桌面上的拖拽暂不支持读取选中项（资源管理器窗口内拖拽支持），桌面拖拽请改用 Ctrl+C。&#10;· 跨机“剪切”按复制处理：对面拿到副本，源文件不会删除。&#10;· 每台电脑按一整块虚拟大屏处理（多显示器视为整体）。"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ========== 关于 ========== -->
+                <TabItem Header="关于">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <Image Width="28" Height="28" Source="pack://application:,,,/Assets/app_256.png"/>
+                                        <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="鼠下快传 MouseBridge" FontSize="16" FontWeight="SemiBold"/>
+                                            <TextBlock x:Name="TxtAboutVersion" Text="v1.6.4" FontSize="12"
+                                                       Foreground="{StaticResource AccentBrush}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <!-- 四行信息做成规整的两列表格：标签列定宽 60、行高统一 26、文字垂直居中，
+                                         这样"软件名称 / 当前版本 / 作者 / 联系"四行的左右都不会参差 -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="60"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="26"/>
+                                            <RowDefinition Height="26"/>
+                                            <RowDefinition Height="26"/>
+                                            <RowDefinition Height="26"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="软件名称"
+                                                   Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1"
+                                                   Text="鼠下快传（跨电脑键鼠共享与文件互传工具）"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="当前版本"
+                                                   Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="TxtAboutVerRow" Grid.Row="1" Grid.Column="1"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="作者"
+                                                   Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="TxtAboutAuthor" Grid.Row="2" Grid.Column="1"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="联系"
+                                                   Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal"
+                                                    VerticalAlignment="Center">
+                                            <TextBlock VerticalAlignment="Center">
+                                                <Hyperlink x:Name="LnkContact" Click="LnkContact_Click"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           TextDecorations="Underline" NavigateUri="mailto:Thomajesty@163.com">
+                                                    <Run x:Name="RunContact" Text="Thomajesty@163.com"/>
+                                                </Hyperlink>
+                                            </TextBlock>
+                                            <!-- 复制按钮：不写文字，就用"两份文件叠放"的描边图标（悬停浮出浅灰底，点一下变对勾） -->
+                                            <Button x:Name="BtnCopyContact" Style="{StaticResource GhostIconButton}"
+                                                    Margin="6,0,0,0" Click="BtnCopyContact_Click" ToolTip="复制邮箱地址">
+                                                <Path x:Name="IcoCopy"
+                                                      Data="M 4.5,1.3 H 9.8 A 1.6,1.6 0 0 1 11.4,2.9 V 9.4 M 1.6,3.9 H 7 A 1.6,1.6 0 0 1 8.6,5.5 V 12.4 A 1.6,1.6 0 0 1 7,14 H 1.6 A 1.6,1.6 0 0 1 0,12.4 V 5.5 A 1.6,1.6 0 0 1 1.6,3.9 Z"
+                                                      Stroke="{StaticResource Text2Brush}" StrokeThickness="1.2"
+                                                      StrokeLineJoin="Round" Fill="Transparent"
+                                                      Width="13" Height="15"/>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0"
+                                               Text="两台电脑共享一套鼠标和键盘（鼠标推到对端之后，这边敲的键也一起送过去）、剪贴板互通、文件跨机拖拽/复制，像一台电脑一样自然。"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Text="赞助支持" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,10"
+                                               Text="如果这个工具帮你省了时间，欢迎请作者喝杯咖啡 —— 随缘就好，用得开心最重要。"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Background="#FAFAFA" BorderBrush="{StaticResource LineBrush}"
+                                                BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,14,0">
+                                            <StackPanel>
+                                                <Image x:Name="ImgQrWechat" Width="118" Height="118"
+                                                       Source="pack://application:,,,/Assets/qr_wechat.png"/>
+                                                <TextBlock Text="微信收款" FontSize="12" HorizontalAlignment="Center"
+                                                           Margin="0,6,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="#FAFAFA" BorderBrush="{StaticResource LineBrush}"
+                                                BorderThickness="1" CornerRadius="6" Padding="10">
+                                            <StackPanel>
+                                                <Image x:Name="ImgQrAlipay" Width="118" Height="118"
+                                                       Source="pack://application:,,,/Assets/qr_alipay.png"/>
+                                                <TextBlock Text="支付宝收款" FontSize="12" HorizontalAlignment="Center"
+                                                           Margin="0,6,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+        </Grid>
+
+        <!-- ===== 底部按钮 ===== -->
+        <Border Grid.Row="3" Background="{StaticResource BgBrush}" Padding="12,10,12,12">
+            <Grid>
+                <TextBlock x:Name="TxtSaveHint" VerticalAlignment="Center" Style="{StaticResource Hint}"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="BtnClose2" Content="关闭到托盘" Width="104" Click="BtnClose_Click"/>
+                    <Button x:Name="BtnSave" Content="保存并应用" Width="112" Margin="8,0,0,0"
+                            Style="{StaticResource AccentButton}" Click="BtnSave_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

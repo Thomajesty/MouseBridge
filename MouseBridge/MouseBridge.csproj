@@ -1,0 +1,94 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    双目标：同一套源码出两个包
+      · net8.0-windows —— 自包含单文件 exe，Win10/11 免安装直接用
+      · net48          —— .NET Framework 4.8，Win7 SP1 / 32 位系统也能跑
+    两个目标之间的 API 差异全部收敛在 Core/Compat.cs 与 Core/IsExternalInit.cs。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net8.0-windows;net48</TargetFrameworks>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>MouseBridge</RootNamespace>
+    <AssemblyName>MouseBridge</AssemblyName>
+    <Version>1.6.0</Version>
+    <FileVersion>1.6.0.0</FileVersion>
+    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <Product>鼠下快传 MouseBridge</Product>
+    <Company>鼠下快传</Company>
+    <Authors>Thomajesty</Authors>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- ================= net8.0-windows =================
+       体积优化的几个开关注意：
+       不能开 InvariantGlobalization —— 放 GC 里的 globalization-invariant 会让 WPF
+       字体缓存初始化抛 CultureNotFoundException，中文/多字体回退直接崩；
+       不能开 UseSystemResourceKeys —— 它把异常消息替换成资源键名，日志失去排查价值。 -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <EnableUnsafeBinaryFormatterSerialization>false</EnableUnsafeBinaryFormatterSerialization>
+    <!-- WFAC010：WinForms 分析器建议把 DPI 设置从 manifest 挪到 ApplicationHighDpiMode。
+         本程序主体是 WPF，PerMonitorV2 必须写在 manifest 里；而且 manifest 还要兼顾
+         Win7（只认 dpiAware），所以这条建议不适用。 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <!-- ================= net48（Win7 SP1 / 32 位） =================
+       .NET Framework 不支持自包含/单文件，所以是一个小文件夹（exe + 几个 dll），
+       目标机需要有 .NET Framework 4.8（Win10 1903+ 已内置，Win7 需另装一次）。
+       AnyCPU：64 位系统上以 64 位跑，32 位系统上自动以 32 位跑，一个包通吃。 -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+    <Resource Include="Assets\app_256.png" />
+    <Resource Include="Assets\qr_wechat.png" />
+    <Resource Include="Assets\qr_alipay.png" />
+  </ItemGroup>
+
+  <!-- net8：DPAPI 在 BCL 里是独立包 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- net48：只实现到 .NET Standard 2.0，下面这些要显式引入 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <!-- dynamic 需要 Microsoft.CSharp；DPAPI（ProtectedData）在 System.Security 里 -->
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Security" />
+    <!-- 没装 VS / .NET Framework 目标包也能编译（只提供参考程序集，不参与运行） -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
+    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms 会注入 System.Windows.Forms / System.Drawing 全局 using，与 WPF 类型冲突，全部移除 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <!-- 全局可见的核心类型（含 Compat.cs 里的兼容层） -->
+    <Using Include="MouseBridge.Core" />
+    <Using Include="MouseBridge.Input" />
+  </ItemGroup>
+
+</Project>

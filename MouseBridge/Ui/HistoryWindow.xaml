@@ -1,0 +1,256 @@
+<Window x:Class="MouseBridge.Ui.HistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="鼠下快传 传输记录"
+        Width="960" Height="700" MinWidth="820" MinHeight="560"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
+        WindowStyle="None" Background="{StaticResource BgBrush}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" FontFamily="{StaticResource UiFont}">
+    <Window.Resources>
+        <!-- 「只看失败」筛选标签：选中态变红，和记录列表里的失败色呼应 -->
+        <Style x:Key="FailChip" TargetType="ToggleButton" BasedOn="{StaticResource ChipToggle}"/>
+    </Window.Resources>
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" CornerRadius="0"
+                      GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="46"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===== 标题栏 ===== -->
+        <Grid Grid.Row="0" Background="{StaticResource BgBrush}">
+            <StackPanel Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+                <Image x:Name="ImgAppIcon" Width="20" Height="20" VerticalAlignment="Center"/>
+                <TextBlock Text="传输记录与运行日志" FontSize="14" FontWeight="SemiBold" Margin="9,0,0,0"
+                           VerticalAlignment="Center"/>
+                <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
+                        VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtVersion" Text="v1.3.0" FontSize="11"
+                               Foreground="{StaticResource AccentBrush}"/>
+                </Border>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Style="{StaticResource CaptionButton}" Click="BtnMin_Click" ToolTip="最小化">
+                    <Path Data="M 0,0 H 10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1"/>
+                </Button>
+                <Button x:Name="BtnMax" Style="{StaticResource CaptionButton}" Click="BtnMax_Click" ToolTip="最大化">
+                    <Grid>
+                        <Path x:Name="IcoMax" Data="M 0.5,0.5 H 9.5 V 9.5 H 0.5 Z"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1"/>
+                        <Path x:Name="IcoRestore" Data="M 2.5,0.5 H 9.5 V 7.5 H 6.5 M 6.5,2.5 H 0.5 V 9.5 H 5.5"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1" Visibility="Collapsed"/>
+                    </Grid>
+                </Button>
+                <Button Style="{StaticResource CaptionCloseButton}" Click="BtnClose_Click" ToolTip="关闭">
+                    <Path Data="M 0,0 L 10,10 M 10,0 L 0,10"
+                          Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          StrokeThickness="1.1"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- ===== 当前状态 ===== -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="14,0,14,10" Padding="16,13">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="StatusDot" Width="11" Height="11" Fill="{StaticResource Text3Brush}"
+                                 VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtStatus" Text="状态：启动中…" FontSize="15" FontWeight="SemiBold"
+                                   Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtDetail" Foreground="{StaticResource Text3Brush}" FontSize="12"
+                                   Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Style="{StaticResource Chip}" Background="{StaticResource AccentSoftBrush}">
+                            <TextBlock x:Name="TxtMeChip" Style="{StaticResource ChipText}" Text="本机"
+                                       Foreground="{StaticResource AccentBrush}"/>
+                        </Border>
+                        <Border Style="{StaticResource Chip}" Margin="6,0,0,0">
+                            <TextBlock x:Name="TxtPeerChip" Style="{StaticResource ChipText}" Text="对端未连接"/>
+                        </Border>
+                        <Border Style="{StaticResource Chip}" Margin="6,0,0,0">
+                            <TextBlock x:Name="TxtModeChip" Style="{StaticResource ChipText}" Text="角色 —"/>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+
+                <!-- 当前任务 -->
+                <Border x:Name="CurTaskBox" Background="{StaticResource CardSubtleBrush}" CornerRadius="6"
+                        BorderBrush="{StaticResource LineBrush}" BorderThickness="1" Padding="12,10" Margin="0,12,0,0">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="TxtCurTitle" Text="当前没有文件传输" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="TxtCurPct" Grid.Column="1" Text="" FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"/>
+                        </Grid>
+                        <ProgressBar x:Name="PbCur" Margin="0,8,0,0" Minimum="0" Maximum="1" Value="0"/>
+                        <TextBlock x:Name="TxtCurSub" Style="{StaticResource Hint}" Margin="0,7,0,0" Text=""/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- ===== 主体：记录 + 日志 ===== -->
+        <Grid Grid.Row="2" Margin="14,0,14,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="1.1*" MinHeight="120"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="1*" MinHeight="120"/>
+            </Grid.RowDefinitions>
+
+            <!-- 记录标题 -->
+            <Grid Grid.Row="0" Margin="0,0,0,7">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="传输记录" Style="{StaticResource SectionTitle}" Margin="0"/>
+                    <TextBlock x:Name="TxtRecordCount" Style="{StaticResource Hint}" Margin="8,0,0,0"
+                               Text="共 0 条"/>
+                    <!-- 失败筛选（C5）：失败/中断的记录最需要被看见，一键过滤出来 -->
+                    <ToggleButton x:Name="TbOnlyFailed" Style="{StaticResource FailChip}" Margin="12,0,0,0"
+                                  Checked="TbOnlyFailed_Changed" Unchecked="TbOnlyFailed_Changed"
+                                  ToolTip="只显示失败 / 中断的传输记录">
+                        <TextBlock Text="只看失败" FontSize="11"/>
+                    </ToggleButton>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="导出 CSV" Click="BtnExport_Click" Padding="10,3" MinHeight="28" FontSize="12"/>
+                    <Button Content="清空记录" Click="BtnClearRecords_Click" Padding="10,3" MinHeight="28"
+                            FontSize="12" Margin="6,0,0,0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 记录列表 -->
+            <ListView x:Name="LvRecords" Grid.Row="1" SelectionMode="Single"
+                      MouseDoubleClick="LvRecords_DoubleClick" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="时间" Width="128"
+                                        DisplayMemberBinding="{Binding WhenText}"/>
+                        <GridViewColumn Header="方向" Width="54"
+                                        DisplayMemberBinding="{Binding DirText}"/>
+                        <GridViewColumn Header="对端" Width="110"
+                                        DisplayMemberBinding="{Binding PeerText}"/>
+                        <GridViewColumn Header="数量" Width="58"
+                                        DisplayMemberBinding="{Binding CountText}"/>
+                        <GridViewColumn Header="大小" Width="86"
+                                        DisplayMemberBinding="{Binding SizeText}"/>
+                        <GridViewColumn Header="耗时" Width="66"
+                                        DisplayMemberBinding="{Binding ElapsedText}"/>
+                        <GridViewColumn Header="结果" Width="60">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding StateText}" FontWeight="SemiBold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource Text2Brush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding State}" Value="Done">
+                                                        <Setter Property="Foreground" Value="{StaticResource OkBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                        <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Canceled">
+                                                        <Setter Property="Foreground" Value="{StaticResource WarnBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Interrupted">
+                                                        <Setter Property="Foreground" Value="{StaticResource WarnBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Running">
+                                                        <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="位置 / 说明" Width="300">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding TargetText}" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding TargetText}"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+
+            <!-- 日志标题 -->
+            <Grid Grid.Row="2" Margin="0,12,0,7">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="运行日志" Style="{StaticResource SectionTitle}" Margin="0"/>
+                    <TextBlock x:Name="TxtLogFile" Style="{StaticResource Hint}" Margin="8,0,0,0" Text=""/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="级别" VerticalAlignment="Center" Margin="0,0,6,0"
+                               Style="{StaticResource Hint}"/>
+                    <ComboBox x:Name="CbLogLevel" Width="92" Height="28" MinHeight="28" FontSize="12"
+                              SelectionChanged="CbLogLevel_SelectionChanged">
+                        <ComboBoxItem Content="全部" Tag="0"/>
+                        <ComboBoxItem Content="信息以上" Tag="1" IsSelected="True"/>
+                        <ComboBoxItem Content="仅警告错误" Tag="2"/>
+                    </ComboBox>
+                    <CheckBox x:Name="CbAutoScroll" Content="自动滚动到最新" IsChecked="True" Margin="12,0,0,0"
+                              FontSize="12"/>
+                    <Button Content="打开日志目录" Click="BtnOpenLogs_Click" Padding="10,3" MinHeight="28"
+                            FontSize="12" Margin="6,0,0,0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 日志正文 -->
+            <Border Grid.Row="3" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource LineBrush}"
+                    BorderThickness="1" CornerRadius="6">
+                <TextBox x:Name="TxtLog" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                         FontFamily="Cascadia Mono, Consolas, Microsoft YaHei UI" FontSize="12"
+                         Background="Transparent" BorderThickness="0" MinHeight="0"
+                         VerticalContentAlignment="Top" Padding="10,8"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+            </Border>
+        </Grid>
+
+        <!-- ===== 底部按钮 ===== -->
+        <Grid Grid.Row="3" Margin="14,10,14,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="TxtFoot" Style="{StaticResource Hint}" VerticalAlignment="Center"
+                       Text="传输记录会留存在本机，重启后仍可查看。日志按天切分，保留最近 7 天。"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="刷新" Click="BtnRefresh_Click"/>
+                <Button Content="关闭" Click="BtnClose_Click" Margin="8,0,0,0" Style="{StaticResource AccentButton}"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

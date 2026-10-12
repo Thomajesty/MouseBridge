@@ -1,0 +1,29 @@
+# ============ 编译产物 ============
+bin/
+obj/
+build/
+
+# ============ 交付包 ============
+# 二进制安装包走 GitHub Releases 附件，不进仓库（否则每次发版仓库体积暴涨）
+dist/
+
+# ============ 验收截图 ============
+# 开发期的界面验收图，属于过程产物
+shots/
+
+# ============ WorkBuddy / Agent 工作数据 ============
+.workbuddy/
+
+# ============ 编辑器 / IDE ============
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# ============ 杂项 ============
+*.tmp
+Thumbs.db
+Desktop.ini
+.DS_Store
