@@ -45,6 +45,27 @@ public class SecureLink : IDisposable
     /// <summary>最近一次握手失败的原因（给界面显示，比"连不上"有用得多）。</summary>
     public string LastError = "";
 
+    /// <summary>
+    /// 等对方确认的上限。
+    ///
+    /// **三方时长必须严格递增，调任何一个都要连带复核另外两个**：
+    ///   被控端问用户的时间(AskUserConfirm, 70s) &lt; 这里(75s) &lt; 主控端外层等待(Orchestrator.PeerConfirmWaitMs, 80s)
+    ///
+    /// 反过来会出这种怪事：用户在第 65 秒点了「允许」，被控端回 confirm_result=true，
+    /// 可主控端早在第 60 秒就判定"等待超时"断开跑了 —— 用户明明同意了却连不上。
+    /// 之前这里就是 60s，比被控端给用户的 70s 还短。
+    /// </summary>
+    public const int ConfirmWaitMs = 75000;
+
+    /// <summary>
+    /// 本次握手是否被对方**明确拒绝**（对方用户在确认弹窗上点了「拒绝」）。
+    ///
+    /// 必须和"超时 / 连不上"分开：超时该继续换地址重试，而被明确拒绝则应该停下来等用户
+    /// 重新发起 —— 否则会一遍遍去敲对方的门，把对方的确认框刷满屏。
+    /// （这就是"被控端拒绝一次后还一直被邀请"的来源。）
+    /// </summary>
+    public volatile bool PeerDeclined = false;
+
     /// <summary>对端地址（握手前就能拿到，用于弹窗/日志里说明是谁在连）。</summary>
     public string RemoteAddress = "";
 
@@ -135,7 +156,7 @@ public class SecureLink : IDisposable
         Func<SecureLink, bool>? drivesConfirm = null,
         Func<SecureLink, Task<bool>>? askUser = null,
         Action? onPeerAsking = null,
-        int timeoutMs = 6000, int confirmTimeoutMs = 60000)
+        int timeoutMs = 6000, int confirmTimeoutMs = ConfirmWaitMs)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         linked.CancelAfter(timeoutMs);
@@ -231,6 +252,9 @@ public class SecureLink : IDisposable
             if (cf.T != "confirm_result" || !cf.Ok)
             {
                 LastError = string.IsNullOrEmpty(cf.MsgText) ? "对方拒绝了本次连接" : cf.MsgText!;
+                // 这是"对方**用户**明确点了拒绝"，与"超时/网络不通"完全不同 ——
+                // 上层据此停止自动重连（尊重对方的选择，也别再刷人家的确认框）。
+                PeerDeclined = true;
                 Log.Warn("连接被对方拒绝：" + LastError);
                 return false;
             }
