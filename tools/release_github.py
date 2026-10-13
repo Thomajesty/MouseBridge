@@ -169,25 +169,25 @@ def step_tag_and_release(token, owner, repo, tag, notes_file):
                           capture_output=True, text=True).stdout.strip()
     # tag：已存在就跳过（幂等），不存在则创建
     try:
-        api("GET", f"{API}/git/ref/tags/{tag}", token)
+        api("GET", f"{API}/repos/{owner}/{repo}/git/ref/tags/{tag}", token)
         print(f"  · tag {tag} 已存在")
     except RuntimeError as e:
         if "HTTP 404" not in str(e):
             raise
-        api("POST", f"{API}/git/refs", token,
+        api("POST", f"{API}/repos/{owner}/{repo}/git/refs", token,
             {"ref": f"refs/tags/{tag}", "sha": head})
         print(f"  · tag {tag} 已创建 -> {head[:12]}")
 
     # 同名 Release 已存在则先删（重发场景）
     old = {}
     try:
-        old = api("GET", f"{API}/releases/tags/{tag}", token)
+        old = api("GET", f"{API}/repos/{owner}/{repo}/releases/tags/{tag}", token)
     except RuntimeError as e:
         if "HTTP 404" not in str(e):   # 首次发版必然 404，不是错误
             raise
     if old.get("id"):
         print(f"  · 已存在同名 Release(id={old['id']})，先删除")
-        api("DELETE", f"{API}/releases/{old['id']}", token)
+        api("DELETE", f"{API}/repos/{owner}/{repo}/releases/{old['id']}", token)
 
     body = open(os.path.join(ROOT, notes_file), encoding="utf-8").read()
     r = api("POST", f"{API}/repos/{owner}/{repo}/releases", token, {
@@ -291,10 +291,11 @@ def main():
     ap.add_argument("--create", action="store_true", help="仓库不存在时新建")
     ap.add_argument("--public", action="store_true", help="新建为公开仓库（默认私有）")
     ap.add_argument("--skip-push", action="store_true", help="跳过推送代码")
+    ap.add_argument("--ver", help="覆盖版本号（默认读 AppInfo.cs；用于先补发旧版本包）")
     ap.add_argument("--dry-run", action="store_true", help="只做前置检查，不发送任何东西")
     args = ap.parse_args()
 
-    v = version()
+    v = args.ver or version()
     tag = "v" + v
     print(f"鼠下快传 MouseBridge {tag} → GitHub ({args.owner}/{args.repo})")
     print("-" * 58)

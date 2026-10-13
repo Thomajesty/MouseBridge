@@ -46,6 +46,32 @@ public partial class App : System.Windows.Application
 
         var args = e.Args ?? Array.Empty<string>();
 
+        // --check-update：命令行检查更新，结果写 %APPDATA%\MouseBridge\update-check.txt 后退出（自动化测试用）。
+        // 必须 Task.Run 包裹：UI 线程直接 GetResult() 等待会因 Dispatcher 上下文死锁。
+        if (args.Contains("--check-update"))
+        {
+            AppPaths.Ensure();
+            var resultFile = System.IO.Path.Combine(AppPaths.Root, "update-check.txt");
+            try
+            {
+                var t = Task.Run(() => UpdateChecker.CheckToFileAsync(resultFile));
+                if (t.Wait(90_000) && t.Status == TaskStatus.RanToCompletion)
+                    Environment.ExitCode = t.Result;
+                else
+                {
+                    System.IO.File.WriteAllText(resultFile, "error timeout");
+                    Environment.ExitCode = 1;
+                }
+            }
+            catch (Exception ex)
+            {
+                try { System.IO.File.WriteAllText(resultFile, "error " + ex.Message); } catch { }
+                Environment.ExitCode = 1;
+            }
+            Shutdown();
+            return;
+        }
+
         if (args.Contains("--selftest"))
         {
             Environment.ExitCode = SelfTest.Run();
