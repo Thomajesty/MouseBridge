@@ -770,6 +770,25 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- 软件更新：联网查 GitHub Releases，发现新版可下载自动替换（Win7/32 位走 zip 手动解压） -->
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="软件更新" Style="{StaticResource SectionTitle}"/>
+                                    <TextBlock x:Name="TxtUpdateStatus" Style="{StaticResource Hint}"
+                                               Margin="0,0,0,10" TextWrapping="Wrap"
+                                               Text="点击「检查更新」联网获取最新版本。"/>
+                                    <ProgressBar x:Name="PbUpdate" Height="4" Minimum="0" Maximum="100"
+                                                 Visibility="Collapsed" Margin="0,0,0,10"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button x:Name="BtnCheckUpdate" Style="{StaticResource AccentButton}"
+                                                Content="检查更新" Click="BtnCheckUpdate_Click"/>
+                                        <Button x:Name="BtnDoUpdate" Style="{StaticResource CaptionButton}"
+                                                Content="下载并安装" Margin="10,0,0,0" Visibility="Collapsed"
+                                                Click="BtnDoUpdate_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
                                     <TextBlock Text="赞助支持" Style="{StaticResource SectionTitle}"/>

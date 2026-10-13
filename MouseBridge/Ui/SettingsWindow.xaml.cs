@@ -1167,6 +1167,126 @@ public partial class SettingsWindow : Window
         MessageBox.Show("已重置，下次连接会重新记录指纹。", AppInfo.Name);
     }
 
+    // ==================== 软件更新 ====================
+
+    UpdateInfo? _update;           // 最近一次检查的结果
+    volatile bool _updatingBusy;   // 防重复点击
+
+    /// <summary>联网查 GitHub 最新 Release，把结果写进状态行。</summary>
+    async void BtnCheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updatingBusy) return;
+        _updatingBusy = true;
+        BtnCheckUpdate.IsEnabled = false;
+        BtnDoUpdate.Visibility = Visibility.Collapsed;
+        TxtUpdateStatus.Text = "正在检查更新…";
+        try
+        {
+            var info = await UpdateChecker.QueryLatestAsync();
+            if (info == null)
+            {
+                TxtUpdateStatus.Text = "线上还没有发布过版本。";
+            }
+            else if (!info.HasUpdate)
+            {
+                _update = null;
+                TxtUpdateStatus.Text = $"已是最新版本（v{AppInfo.Version}）。";
+            }
+            else
+            {
+                _update = info;
+                TxtUpdateStatus.Text = $"发现新版本 v{info.LatestVersion}（当前 v{AppInfo.Version}），点击「下载并安装」升级。";
+                BtnDoUpdate.Visibility = Visibility.Visible;
+            }
+        }
+        catch (Exception ex)
+        {
+            TxtUpdateStatus.Text = "检查失败：" + ex.Message;
+        }
+        finally
+        {
+            BtnCheckUpdate.IsEnabled = true;
+            _updatingBusy = false;
+        }
+    }
+
+    /// <summary>下载新版：Win10+64 位自动替换重启；Win7/32 位下载 zip 后打开所在文件夹手动解压。</summary>
+    async void BtnDoUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        var info = _update;
+        if (info == null || !info.HasUpdate || info.AssetId == 0 || _updatingBusy) return;
+        _updatingBusy = true;
+        BtnDoUpdate.IsEnabled = false;
+        BtnCheckUpdate.IsEnabled = false;
+        try
+        {
+            string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            string dest = System.IO.Path.Combine(
+                System.IO.Path.GetDirectoryName(string.IsNullOrEmpty(exePath) ? "." : exePath) ?? ".",
+                info.AssetName);
+
+            PbUpdate.Visibility = Visibility.Visible;
+            PbUpdate.Value = 0;
+            TxtUpdateStatus.Text = $"正在下载 {info.AssetName}（{info.AssetSize / 1048576.0:0.0} MB）…";
+            var progress = new Progress<double>(p =>
+            {
+                PbUpdate.Value = p;
+                TxtUpdateStatus.Text = $"正在下载… {p:0}%";
+            });
+            await UpdateChecker.DownloadAssetAsync(info.AssetId, dest, progress);
+            PbUpdate.Value = 100;
+
+            if (dest.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                // Win7 / 32 位：没有自包含单文件，自动替换只认 exe；给出 zip 让用户手动覆盖
+                TxtUpdateStatus.Text = $"新版本已下载：{dest}\n请解压后覆盖旧文件。";
+                try
+                {
+                    System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{dest}\"");
+                }
+                catch { }
+                BtnDoUpdate.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            if (MessageBox.Show($"新版本已下载完成。\n\n现在重启并替换为新版本吗？（旧程序会保留为 .old 备份）",
+                    AppInfo.Name, MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+            {
+                TxtUpdateStatus.Text = $"新版本已下载到：{dest}\n可稍后手动改名替换，或重新点击「下载并安装」。";
+                return;
+            }
+
+            // 自替换脚本：等本进程退出 → 旧 exe 改 .old → 新 exe 就位 → 拉起新程序。
+            // 必须经 cmd 中转，因为运行中的 exe 不能覆盖自己。
+            string newFile = dest;
+            string log = System.IO.Path.Combine(Core.AppPaths.LogDir, "update.log");
+            string script =
+                "@echo off\r\n" +
+                "timeout /t 2 /nobreak >nul\r\n" +
+                $"move /y \"{exePath}\" \"{exePath}.old\" >> \"{log}\" 2>&1\r\n" +
+                $"move /y \"{newFile}\" \"{exePath}\" >> \"{log}\" 2>&1\r\n" +
+                $"start \"\" \"{exePath}\"\r\n";
+            string bat = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "mb-update.cmd");
+            System.IO.File.WriteAllText(bat, script, System.Text.Encoding.GetEncoding(936));
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"" + bat + "\"")
+            { CreateNoWindow = true, UseShellExecute = false });
+
+            TxtUpdateStatus.Text = "正在重启升级…";
+            Application.Current?.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            TxtUpdateStatus.Text = "更新失败：" + ex.Message;
+            PbUpdate.Visibility = Visibility.Collapsed;
+        }
+        finally
+        {
+            BtnDoUpdate.IsEnabled = true;
+            BtnCheckUpdate.IsEnabled = true;
+            _updatingBusy = false;
+        }
+    }
+
     void CbDropDir_Changed(object sender, SelectionChangedEventArgs e) => UpdateDropDirVisibility();
 
     void UpdateDropDirVisibility()

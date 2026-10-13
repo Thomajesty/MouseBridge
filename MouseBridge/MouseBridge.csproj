@@ -16,9 +16,9 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>MouseBridge</RootNamespace>
     <AssemblyName>MouseBridge</AssemblyName>
-    <Version>1.6.0</Version>
-    <FileVersion>1.6.0.0</FileVersion>
-    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <Version>1.7.0</Version>
+    <FileVersion>1.7.0.0</FileVersion>
+    <AssemblyVersion>1.7.0.0</AssemblyVersion>
     <Product>鼠下快传 MouseBridge</Product>
     <Company>鼠下快传</Company>
     <Authors>Thomajesty</Authors>
@@ -69,9 +69,10 @@
 
   <!-- net48：只实现到 .NET Standard 2.0，下面这些要显式引入 -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
-    <!-- dynamic 需要 Microsoft.CSharp；DPAPI（ProtectedData）在 System.Security 里 -->
+    <!-- dynamic 需要 Microsoft.CSharp；DPAPI（ProtectedData）在 System.Security 里；HttpClient 在 System.Net.Http 里 -->
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Security" />
+    <Reference Include="System.Net.Http" />
     <!-- 没装 VS / .NET Framework 目标包也能编译（只提供参考程序集，不参与运行） -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
