@@ -247,6 +247,18 @@ public static class SelfTest
         Check("桌面目录可解析", desktop.Length > 0 && Directory.Exists(desktop), desktop);
     }
 
+    static async Task<T?> WaitFor<T>(Func<T?> probe, TimeSpan timeout) where T : class
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var v = probe();
+            if (v != null) return v;
+            await Task.Delay(50);
+        }
+        return probe();
+    }
+
     static async Task RunLinkTest()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -270,6 +282,7 @@ public static class SelfTest
         // 服务端（主控端角色）：收剪贴板文本 + 收文件
         var textTcs = new TaskCompletionSource<string>();
         var doneTcs = new TaskCompletionSource<List<string>>();
+        FileTransferService? serverXfer = null;   // 暂停/取消用例要在服务端会话外操纵传输服务
         var server = Task.Run(async () =>
         {
             var tcp = await listener.AcceptTcpClientAsync();
@@ -280,6 +293,7 @@ public static class SelfTest
             if (!ok) { textTcs.TrySetException(new IOException("服务端认证失败")); return; }
 
             var xfer = new FileTransferService((m, p) => link.SendAsync(m, p));
+            serverXfer = xfer;
             link.OnMsg += (m, p) =>
             {
                 if (m.T == "clip_data" && m.Kind == "text" && p != null)
@@ -326,6 +340,46 @@ public static class SelfTest
             Check("目录层级还原", File.Exists(nested) && new FileInfo(nested).Length == 4096, nested);
         }
         else Check("目录层级还原", false, "没有收到目录");
+
+        // —— 暂停 / 恢复 / 取消（需求1：传输框的暂停与停止按钮背后就是这三个动作）——
+        var bigSrc = Path.Combine(Path.GetTempPath(), "mb-selftest-big-" + Guid.NewGuid().ToString("N") + ".bin");
+        File.WriteAllBytes(bigSrc, Rand.Bytes(32 * 1024 * 1024));
+        var (bigItems, bigTotal, _) = FileScanner.Expand(new[] { bigSrc });
+
+        // 暂停→恢复：先暂停再发起发送（确定性：一个块都发不出去），验证服务端进度 400ms 内纹丝不动，
+        // 恢复后能正常传完。
+        serverXfer = await WaitFor(() => serverXfer, TimeSpan.FromSeconds(3));
+        if (serverXfer == null) throw new IOException("服务端传输服务未就绪");
+        var recvDone2 = new TaskCompletionSource<List<string>>();
+        serverXfer.RecvDone += (_, p2) => recvDone2.TrySetResult(p2);
+        long serverGot = -1, serverGotAfterPause = -1;
+        serverXfer.Progress += (_, g, _) => Interlocked.Exchange(ref serverGot, g);
+
+        serverXfer.BeginRecv(10, bigTotal);
+        clientXfer.PauseTransfer();
+        var sendTask = Task.Run(() => clientXfer.SendFilesAsync(10, bigItems));
+        await Task.Delay(400);
+        serverGotAfterPause = Interlocked.CompareExchange(ref serverGot, -1, -1);
+        Check("传输暂停后进度停滞", serverGotAfterPause <= 0, $"服务端已收 {serverGotAfterPause}B（应≈0）");
+        clientXfer.ResumeTransfer();
+        var paths2 = await recvDone2.Task.WithTimeout(TimeSpan.FromSeconds(30));
+        Check("暂停后恢复传输完成", paths2.Count == 1, $"paths={paths2.Count}");
+
+        // 取消：先暂停再发起发送（发不出去），随后取消 —— 100% 命中"传输中取消"路径
+        //（loopback 速度太快，先发后取消会撞上"已经传完"的竞态）。
+        // 取消会 UnpauseForCancel + ct.Cancel → 发送循环抛 OCE → 向服务端发 xfer_fail。
+        var failedTcs = new TaskCompletionSource<string>();
+        serverXfer.Failed += (_, r) => failedTcs.TrySetResult(r);
+        serverXfer.BeginRecv(11, bigTotal);
+        clientXfer.PauseTransfer();
+        var sendTask2 = Task.Run(() => clientXfer.SendFilesAsync(11, bigItems));
+        await Task.Delay(150);
+        clientXfer.CancelSending();
+        var failReason = await failedTcs.Task.WithTimeout(TimeSpan.FromSeconds(5));
+        Check("传输取消", failReason.Contains("取消"), failReason);
+        try { await sendTask; } catch { }
+        try { await sendTask2; } catch { }
+        try { File.Delete(bigSrc); } catch { }
 
         link2.Close();
         try { File.Delete(src); } catch { }

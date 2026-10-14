@@ -9,9 +9,9 @@
 
 | 包 | 体积 | 说明 |
 |---|---|---|
-| `MouseBridge-1.7.0-win-x64.exe` | ~64 MB | 自包含 .NET 8 运行时，拷过去双击就能用（Win10/11 推荐） |
-| `MouseBridge-1.7.0-net8-x64.exe` | ~1 MB | 轻量版，需先装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `MouseBridge-1.7.0-win7-32bit.zip` | ~1 MB | **Windows 7 SP1 / 32 位系统版**（.NET Framework 4.8），见下节 |
+| `MouseBridge-1.7.1-win-x64.exe` | ~64 MB | 自包含 .NET 8 运行时，拷过去双击就能用（Win10/11 推荐） |
+| `MouseBridge-1.7.1-net8-x64.exe` | ~1 MB | 轻量版，需先装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `MouseBridge-1.7.1-win7-32bit.zip` | ~1 MB | **Windows 7 SP1 / 32 位系统版**（.NET Framework 4.8），见下节 |
 
 > 三个包都在本仓库的 **[Releases](../../releases)** 页，`md5.txt` 与之一并附上，下载后可比对校验。
 
@@ -22,7 +22,7 @@
 .NET 8 从 .NET 6 起就把最低系统要求提到了 Windows 10 1607，**在 Win7 上根本起不来**（不是配置问题）。
 所以另外出了一份 .NET Framework 4.8 版（微软最后一个支持 Win7 SP1 的运行时）：
 
-1. 解压 `MouseBridge-1.7.0-win7-32bit.zip`，**整个文件夹**拷到目标电脑（不能只拷 exe，同目录的 dll 是必需的）；
+1. 解压 `MouseBridge-1.7.1-win7-32bit.zip`，**整个文件夹**拷到目标电脑（不能只拷 exe，同目录的 dll 是必需的）；
 2. 目标机需要有 **.NET Framework 4.8**：
    - Win10 1903 及以上：已内置，直接可用；
    - Win7 SP1 / 8 / 8.1：先装一次离线包（约 110MB），<https://dotnet.microsoft.com/download/dotnet-framework/net48>；

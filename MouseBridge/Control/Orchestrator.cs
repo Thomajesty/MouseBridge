@@ -120,6 +120,7 @@ public class Orchestrator : IDisposable
     {
         public long Id;
         public long Total;
+        public int Count = 1;     // 文件数（进度文案用）
         public bool Requested;    // 已请求传输
         public bool Drop;         // 投递模式（拖拽）
         public string? TargetDir; // 投递目标目录
@@ -128,6 +129,7 @@ public class Orchestrator : IDisposable
     // —— 传输进度（网络线程写，UI 泵读）——
     volatile bool _xferBusy;
     volatile bool _xferSending;
+    volatile bool _xferPaused;            // 需求1：传输被暂停（本端或对端发起）
     long _xferSent, _xferTotal;
     string _xferLabel = "";
     long _lastToastMs;
@@ -207,6 +209,9 @@ public class Orchestrator : IDisposable
             _indicator = new IndicatorWindow();
             ApplyLiveConfig();
             _toast = new ToastWindow();
+            // 传输框上的暂停/停止按钮（需求1）：点击回调统一走 UI 线程进 Orchestrator
+            _toast.PauseClicked += () => UiUtil.Run(XferTogglePause);
+            _toast.StopClicked += () => UiUtil.Run(XferStop);
             // 被控端右上角常驻横幅：正被控制时出现，带「暂停接管」按钮
             _banner = new ControlBanner();
             _banner.PauseRequested += () => ReleaseControl("被控端主动暂停接管");
@@ -1304,7 +1309,24 @@ public class Orchestrator : IDisposable
 
                 case "drop_begin": OnDropBegin(m); break;
                 case "drop_commit": UiUtil.Run(CommitDropIn); break;
-                case "drop_cancel": OnDropCancel(); break;
+                case "drop_cancel":
+                    // 对端发来的 drop_cancel 有两种身份，必须按本机状态路由（需求3 根因）：
+                    //   · 本机是源端（_dropHandover=true）：对端拒收/取消了投递 → 必须走
+                    //     CancelDropOut() 清掉源端状态。旧代码无脑调 OnDropCancel()（那是
+                    //     目标端的清理），源端 _dropHandover 永远清不掉 → 指示器永久卡在
+                    //     "拖拽中"，这就是用户看到的"传输完成后对端还显示拖动中"。
+                    //   · 本机是目标端：对端作为源端取消了 → 原有 OnDropCancel() 清 _dropIn。
+                    if (_dropHandover) UiUtil.Run(CancelDropOut);
+                    else OnDropCancel();
+                    break;
+                case "xfer_pause":            // 对端暂停/恢复了传输（需求1）
+                    if (m.On) { _xfer.PauseTransfer(); _xferPaused = true; }
+                    else { _xfer.ResumeTransfer(); _xferPaused = false; }
+                    Log.Info($"对端{(m.On ? "暂停" : "恢复")}了传输");
+                    break;
+                case "xfer_cancel":           // 对端点了「停止」（需求1）：本机这一侧也立即终止
+                    UiUtil.Run(() => CancelCurrentTransfer("对端停止了传输"));
+                    break;
 
                 case "file_req":
                     // 在读循环线程上，必须持锁取值（items 是 List 引用，取出后即可解锁，
@@ -2055,9 +2077,12 @@ public class Orchestrator : IDisposable
         if (e.Vk == 0x56 && ctrlDown && (_pending == null || _pending.Drop))
             PostMsg(new Msg { T = "clip_req", Stamp = _localClipMs });
 
-        if (!IsServerRole && BeingControlled) return false;
-        if (IsServerRole && RemoteActive) return false;
-        if (e.Vk == 0x56 && _pending is { Requested: false, Drop: false } && ctrlDown)
+        // 需求2：快捷键以"鼠标所在的电脑"为准 —— 鼠标在对端时，主控键盘的 Ctrl+V
+        // 会转发注入到对端；对端（无论被控中还是主控中）都可能有待接收的文件物料，
+        // 必须先做 file_req 拦截再放行。旧代码把两个"放行"判断放在拦截之前，
+        // 被控端的 Ctrl+V 永远到不了拦截逻辑 → 注入的 Ctrl+V 直接空粘贴
+        //（剪贴板里还没有文件内容），用户看到的就是"跨电脑粘贴没反应"。
+        if (e.Vk == 0x56 && ctrlDown && _pending is { Requested: false, Drop: false })
         {
             if (Native.IsShellForeground())
             {
@@ -2067,6 +2092,12 @@ public class Orchestrator : IDisposable
                     {
                         _pending.Requested = true;
                         PostMsg(new Msg { T = "file_req", Id = _pending.Id });
+                        _xferBusy = true; _xferSending = false;
+                        _xferSent = 0; _xferTotal = Math.Max(_pending.Total, 1);
+                        _xferLabel = $"接收 {_pending.Count} 个文件";
+                        _xfer.BeginRecv(_pending.Id, _pending.Total);
+                        TransferJournal.Begin(_pending.Id, false, _pending.Total, _pending.Count,
+                            _xferLabel, PeerName, "剪贴板");
                         UiUtil.Run(() => _toast?.Show("正在接收文件", "从对端接收文件中…", null, 0));
                         Log.Info("拦截 Ctrl+V，请求文件传输");
                         return true;
@@ -2074,6 +2105,9 @@ public class Orchestrator : IDisposable
                 }
             }
         }
+
+        if (!IsServerRole && BeingControlled) return false;
+        if (IsServerRole && RemoteActive) return false;
         return false;
     }
 
@@ -2279,7 +2313,7 @@ public class Orchestrator : IDisposable
                 lock (_pendingGate)
                 {
                     _xfer.CancelRecv();
-                    _pending = new PendingRecv { Id = m.Id, Total = m.Size, Drop = m.Drop };
+                    _pending = new PendingRecv { Id = m.Id, Total = m.Size, Count = Math.Max(m.Count, 1), Drop = m.Drop };
                 }
                 Badge = BadgeState.PendingFile;
                 bool preload = (m.Drop || (m.Eager && Cfg.EagerReceive));
@@ -2507,6 +2541,95 @@ public class Orchestrator : IDisposable
 
     // ================= 传输进度 / 完成 =================
 
+    // —— 暂停 / 停止（需求1：传输框上的两个按钮）——
+
+    /// <summary>传输框「暂停/继续」按钮：切换暂停态并同步对端。</summary>
+    void XferTogglePause()
+    {
+        if (!_xferBusy) return;
+        if (!_xferPaused)
+        {
+            _xferPaused = true;
+            _xfer.PauseTransfer();                       // 本端停（发送端停发/接收端停写）
+            PostMsg(new Msg { T = "xfer_pause", On = true });   // 对端也停（UI 同步显示）
+            ShowXferToast("已暂停");
+            Log.Info("用户暂停了文件传输");
+        }
+        else
+        {
+            _xferPaused = false;
+            _xfer.ResumeTransfer();
+            PostMsg(new Msg { T = "xfer_pause", On = false });
+            ShowXferToast(null);
+            Log.Info("用户恢复了文件传输");
+        }
+    }
+
+    /// <summary>传输框「停止」按钮：本端立即终止，并通知对端同步终止。</summary>
+    void XferStop()
+    {
+        if (!_xferBusy) return;
+        Log.Info("用户停止了文件传输");
+        PostMsg(new Msg { T = "xfer_cancel" });
+        CancelCurrentTransfer("已停止传输");
+    }
+
+    /// <summary>终止本机当前传输（收发两侧通用）：取消服务层、清 UI 状态、提示用户。</summary>
+    void CancelCurrentTransfer(string reason)
+    {
+        _xferPaused = false;
+        if (_xferSending)
+        {
+            _xfer.CancelSending();   // 会触发 OCE → xfer_fail 回发 → 对端 OnXferFailed（幂等）
+            // OnXferFailed 会把 _xferBusy 等清掉并弹 toast，这里不用重复
+        }
+        else
+        {
+            _xfer.CancelRecv();
+            _xferBusy = false;
+            lock (_pendingGate)
+            {
+                if (_pending != null)
+                {
+                    TransferJournal.Finish(_pending.Id, XferState.Canceled, null, reason);
+                    _pending = null;
+                }
+            }
+            Badge = BadgeState.None;
+            OnTransferUiEnded();
+            UiUtil.Run(() => _toast?.Show("已取消", reason, null, 3000));
+        }
+    }
+
+    /// <summary>按当前进度刷新传输 toast（含暂停/停止按钮）；reason=null 表示正常进度文案。</summary>
+    void ShowXferToast(string? note)
+    {
+        double prog = MathX.Clamp(_xferSent / (double)Math.Max(_xferTotal, 1), 0, 1);
+        string lbl = string.IsNullOrEmpty(_xferLabel) ? (_xferSending ? "发送" : "接收") : _xferLabel;
+        string line = note != null ? $"{lbl}　{note}" : null;
+        UiUtil.Run(() =>
+        {
+            if (line != null) _toast?.Show("文件传输", line, prog, 0);
+            _toast?.SetTransferControls(_xferBusy, _xferPaused);
+        });
+    }
+
+    /// <summary>传输结束后统一收尾：隐藏传输按钮、清拖拽残留状态、立即刷新指示器（需求1+3）。</summary>
+    void OnTransferUiEnded()
+    {
+        UiUtil.Run(() => _toast?.SetTransferControls(false, false));
+        // 需求3 兜底：传输结束时应无任何拖拽态。若因事件丢失残留，这里强制清掉，
+        // 避免指示器永久卡在"拖拽中"。
+        if (_dropHandover)
+        {
+            _dropHandover = false;
+            Log.Warn("传输结束时拖拽状态残留，已强制清除");
+        }
+        PeerDragActive = false;
+        _dragActiveLocal = false;
+        UiUtil.Run(PumpUiState);
+    }
+
     void OnXferProgress(long id, long sent, long total)
     {
         _xferBusy = true; _xferSent = sent; _xferTotal = Math.Max(total, 1);
@@ -2525,8 +2648,13 @@ public class Orchestrator : IDisposable
             string line = (tot >= 1
                 ? $"{lbl}　{mb:F1} / {tot:F1} MB　{pct}%"
                 : $"{lbl}　{sent / 1024.0:F0} / {_xferTotal / 1024.0:F0} KB　{pct}%")
+                + (_xferPaused ? "　已暂停" : "")
                 + speed;
-            UiUtil.Run(() => _toast?.Show("文件传输", line, (double)sent / _xferTotal, 0));
+            UiUtil.Run(() =>
+            {
+                _toast?.Show("文件传输", line, (double)sent / _xferTotal, 0);
+                _toast?.SetTransferControls(true, _xferPaused);   // 需求1：传输中常驻按钮
+            });
         }
     }
 
@@ -2568,6 +2696,7 @@ public class Orchestrator : IDisposable
         bool wasSending = _xferSending;
         _xferBusy = false;
         _xferSending = false;
+        _xferPaused = false;
         _xferSent = _xferTotal;                       // 收尾时把进度补满，避免"差一点不动"
         _spdLastTick = 0; _spdLastSent = 0; _spdBytesPerSec = 0;   // 重置速度采样，下次传输重新起算
         lock (_outGate)
@@ -2576,6 +2705,7 @@ public class Orchestrator : IDisposable
             _outgoingVia.Remove(id);
         }
         TransferJournal.Finish(id, XferState.Done, $"→ {PeerName}");
+        OnTransferUiEnded();
         if (wasSending)
         {
             double mb = _xferTotal / 1048576.0;
@@ -2588,7 +2718,9 @@ public class Orchestrator : IDisposable
     {
         bool wasRecv = _xferBusy && !_xferSending;
         _xferBusy = false;
+        _xferPaused = false;
         _xferSent = _xferTotal;
+        OnTransferUiEnded();
         var pend = _pending;
         if (pend == null || pend.Id != id)
         {
@@ -2682,6 +2814,8 @@ public class Orchestrator : IDisposable
     void OnXferFailed(long id, string reason)
     {
         _xferBusy = false;
+        _xferPaused = false;
+        OnTransferUiEnded();
         lock (_pendingGate)
         {
             if (_pending?.Id == id) { _pending = null; Badge = BadgeState.None; }
@@ -2746,6 +2880,8 @@ public class Orchestrator : IDisposable
         if (_xferBusy)
         {
             var lbl = string.IsNullOrEmpty(_xferLabel) ? (_xferSending ? "发送" : "接收") : _xferLabel;
+            if (_xferPaused)
+                return new IndView(IndState.Transferring, Badge, prog, "已暂停", $"{lbl} {prog * 100:F0}% · 点传输框「继续」恢复");
             return new IndView(IndState.Transferring, Badge, prog, "传输中", $"{lbl} {prog * 100:F0}%");
         }
 

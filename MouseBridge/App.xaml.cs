@@ -319,6 +319,30 @@ public partial class App : System.Windows.Application
 
                     w.Close();
                     sb.AppendLine("结论：全部控件均可创建并正常读写");
+
+                    // —— 需求1：传输框的暂停/停止按钮 ——
+                    try
+                    {
+                        var toast = new Ui.ToastWindow();
+                        toast.Show("文件传输", "发送 2 个文件　42%", 0.42, 0);
+                        toast.SetTransferControls(true, false);
+                        toast.UpdateLayout();
+                        sb.AppendLine("Toast 传输按钮（显示态）：");
+                        sb.AppendLine($"  按钮行可见：{toast.SetTransferControlsProbeVisible}");
+                        sb.AppendLine($"  暂停键文案：{toast.SetTransferControlsProbePauseText}");
+                        toast.SetTransferControls(true, true);
+                        sb.AppendLine($"  置暂停后文案：{toast.SetTransferControlsProbePauseText}");
+                        toast.SetTransferControls(false, false);
+                        toast.UpdateLayout();
+                        sb.AppendLine($"  收起后可见：{toast.SetTransferControlsProbeVisible}");
+                        int pauseHits = 0, stopHits = 0;
+                        toast.PauseClicked += () => pauseHits++;
+                        toast.StopClicked += () => stopHits++;
+                        toast.RaiseTransferProbeClicks();
+                        sb.AppendLine($"  点击事件回调：暂停={pauseHits} 停止={stopHits}");
+                        toast.Close();
+                    }
+                    catch (Exception ex) { sb.AppendLine("Toast 探针异常：" + ex.Message); }
                 }
                 catch (Exception ex)
                 {
