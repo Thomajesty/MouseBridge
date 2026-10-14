@@ -234,6 +234,9 @@ python tools/legend_hover_test.py    # 端到端验证"悬停颜色图例 → �
 
 ## 支持作者
 
+这个工具完全免费，没有任何功能限制和付费解锁。如果它帮你省下了在两台电脑之间插 U 盘、
+发微信传文件的麻烦，可以扫码请我喝杯咖啡 —— 你的支持是我持续维护下去的动力。
+
 <picture>
   <source srcset="https://cdn.jsdelivr.net/gh/Thomajesty/MouseBridge@main/MouseBridge/Assets/support-qrcodes.png"
           type="image/png">
