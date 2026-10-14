@@ -193,7 +193,7 @@ def step_tag_and_release(token, owner, repo, tag, notes_file):
     r = api("POST", f"{API}/repos/{owner}/{repo}/releases", token, {
         "tag_name": tag,
         "target_commitish": "main",
-        "name": f"鼠下快传 MouseBridge {tag}",
+        "name": f"鼠下快传 {tag}",        # 列表标题与截图一致：不带 MouseBridge 字样
         "body": body,
         "draft": False,
         "prerelease": False,
@@ -223,13 +223,35 @@ def step_upload(token, owner, repo, release_id, files):
             "Content-Type": "application/octet-stream",
             "Content-Length": str(len(blob)),   # 必须显式给
         })
-        try:
-            with urllib.request.urlopen(req, timeout=600) as r:
-                a = json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            print(" 失败")
-            raise RuntimeError(f"上传 {name} 失败 HTTP {e.code}: "
-                               f"{e.read().decode('utf-8','replace')[:300]}") from None
+        # 大文件上传经常撞上网络抖动（SSL EOF / write timeout）—— 每附件最多重试 3 次。
+        # 重试前先查一下这个附件是否其实已经传上去了（上一次可能是超时后服务端已收下）。
+        a = None
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                with urllib.request.urlopen(req, timeout=600) as r:
+                    a = json.loads(r.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as e:
+                print(" 失败")
+                raise RuntimeError(f"上传 {name} 失败 HTTP {e.code}: "
+                                   f"{e.read().decode('utf-8','replace')[:300]}") from None
+            except Exception as e:
+                last_err = e
+                print(f" 网络异常第{attempt}次（{type(e).__name__}）", end="", flush=True)
+                try:
+                    lst = api("GET", f"{API}/repos/{owner}/{repo}/releases/{release_id}/assets",
+                              token)
+                    a = next((x for x in lst if x.get("name") == name), None)
+                    if a is not None:
+                        print("（附件已在服务端，采用）", end="", flush=True)
+                        break
+                except Exception:
+                    pass
+                if attempt < 3:
+                    time.sleep(5)
+        if a is None:
+            raise RuntimeError(f"上传 {name} 失败（重试 3 次）：{last_err}")
         got = a.get("name", "")
         if got != name:
             print(f" 名字被改动！期望 {name}，实际 {got}")

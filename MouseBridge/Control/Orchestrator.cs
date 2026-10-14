@@ -130,6 +130,10 @@ public class Orchestrator : IDisposable
     volatile bool _xferBusy;
     volatile bool _xferSending;
     volatile bool _xferPaused;            // 需求1：传输被暂停（本端或对端发起）
+    // 注意：这两个不能加 volatile（C# 只允许 ≤32 位）。它们只做"丢弃迟到事件/终态闸"的
+    // 优化判断，偶尔读到旧值的最坏后果是多刷一帧旧进度，无害。
+    long _xferActiveId = -1;               // 当前活动传输 id：取消后到达的迟到事件据此丢弃
+    long _xferEndedId = -1;                // 已终结的传输 id：终态一次性，防重复弹提示
     long _xferSent, _xferTotal;
     string _xferLabel = "";
     long _lastToastMs;
@@ -1345,6 +1349,8 @@ public class Orchestrator : IDisposable
                     {
                         _xferSending = true;
                         _xferBusy = true;
+                        _xferActiveId = m.Id;
+                        _xferEndedId = -1;
                         _xferSent = 0;
                         _xferTotal = Math.Max(reqItems.Sum(x => x.Size), 1);
                         int cnt = reqItems.Count(x => !x.IsDir);
@@ -2093,6 +2099,8 @@ public class Orchestrator : IDisposable
                         _pending.Requested = true;
                         PostMsg(new Msg { T = "file_req", Id = _pending.Id });
                         _xferBusy = true; _xferSending = false;
+                        _xferActiveId = _pending.Id;
+                        _xferEndedId = -1;
                         _xferSent = 0; _xferTotal = Math.Max(_pending.Total, 1);
                         _xferLabel = $"接收 {_pending.Count} 个文件";
                         _xfer.BeginRecv(_pending.Id, _pending.Total);
@@ -2325,6 +2333,8 @@ public class Orchestrator : IDisposable
                     string via = m.Drop ? "跨机拖拽" : (m.Eager && Cfg.EagerReceive ? "自动预接收" : "剪贴板");
                     TransferJournal.Begin(m.Id, false, m.Size, m.Count, $"接收 {m.Count} 个文件", PeerName, via);
                     _xferBusy = true; _xferSending = false; _xferSent = 0; _xferTotal = Math.Max(m.Size, 1);
+                    _xferActiveId = m.Id;
+                    _xferEndedId = -1;
                     _xferLabel = $"接收 {m.Count} 个文件";
                     Log.Info($"对端文件物料 id={m.Id}（{(m.Drop ? "拖拽投递" : "自动预接收")}，{FileScanner.Human(m.Size)}）");
                 }
@@ -2531,6 +2541,8 @@ public class Orchestrator : IDisposable
         _xfer.BeginRecv(d.Id, d.Total);
         PostMsg(new Msg { T = "file_req", Id = d.Id });
         _xferBusy = true; _xferSending = false; _xferSent = 0; _xferTotal = Math.Max(d.Total, 1);
+        _xferActiveId = d.Id;
+        _xferEndedId = -1;
         _xferLabel = $"接收 {d.Count} 个文件";
         TransferJournal.Begin(d.Id, false, _xferTotal, d.Count, _xferLabel, PeerName, "跨机拖拽");
         _dropIn = null;
@@ -2571,34 +2583,26 @@ public class Orchestrator : IDisposable
         if (!_xferBusy) return;
         Log.Info("用户停止了文件传输");
         PostMsg(new Msg { T = "xfer_cancel" });
-        CancelCurrentTransfer("已停止传输");
+        long id = _xferActiveId >= 0 ? _xferActiveId : (_pending?.Id ?? -1);
+        if (_xferSending)
+            _xfer.CancelSending();   // OCE → xfer_fail 回发；本地终态由下面一次性收口
+        else
+            _xfer.CancelRecv();
+        // 本地立刻收口（清 UI + 弹一次提示），对端 xfer_fail 到达时被 _xferEndedId 闸拦住
+        FinishLocalTransfer(id >= 0 ? id : long.MinValue, "已停止传输", canceled: true);
     }
 
     /// <summary>终止本机当前传输（收发两侧通用）：取消服务层、清 UI 状态、提示用户。</summary>
     void CancelCurrentTransfer(string reason)
     {
+        if (!_xferBusy) return;
         _xferPaused = false;
+        long id = _xferActiveId >= 0 ? _xferActiveId : (_pending?.Id ?? long.MinValue);
         if (_xferSending)
-        {
             _xfer.CancelSending();   // 会触发 OCE → xfer_fail 回发 → 对端 OnXferFailed（幂等）
-            // OnXferFailed 会把 _xferBusy 等清掉并弹 toast，这里不用重复
-        }
         else
-        {
             _xfer.CancelRecv();
-            _xferBusy = false;
-            lock (_pendingGate)
-            {
-                if (_pending != null)
-                {
-                    TransferJournal.Finish(_pending.Id, XferState.Canceled, null, reason);
-                    _pending = null;
-                }
-            }
-            Badge = BadgeState.None;
-            OnTransferUiEnded();
-            UiUtil.Run(() => _toast?.Show("已取消", reason, null, 3000));
-        }
+        FinishLocalTransfer(id, reason, canceled: true);
     }
 
     /// <summary>按当前进度刷新传输 toast（含暂停/停止按钮）；reason=null 表示正常进度文案。</summary>
@@ -2632,7 +2636,11 @@ public class Orchestrator : IDisposable
 
     void OnXferProgress(long id, long sent, long total)
     {
-        _xferBusy = true; _xferSent = sent; _xferTotal = Math.Max(total, 1);
+        // 取消后的迟到数据块必须在这里丢弃：旧代码无条件 _xferBusy=true，
+        // 取消后对端还在途的 chunk 会把 UI 重新点亮成"传输中"、进度 toast 继续刷，
+        // 表现为"已取消"之后又闪回传输态、提示反复弹。
+        if (id != _xferActiveId || !_xferBusy) return;
+        _xferSent = sent; _xferTotal = Math.Max(total, 1);
         TransferJournal.Progress(id, sent, total);
         var now = Monotonic.Ms;
         if (now - _lastToastMs > 150)
@@ -2691,8 +2699,35 @@ public class Orchestrator : IDisposable
         return $"　{spd}　{eta}";
     }
 
+    /// <summary>
+    /// 本地传输终结（取消/失败）：清 UI 与台账、弹一次提示。
+    /// 与 OnXferFailed 共用，带 _xferEndedId 一次性闸 —— 本地主动停止与对端
+    /// xfer_fail 两条路都会走到这里，不会重复弹提示。
+    /// </summary>
+    void FinishLocalTransfer(long id, string reason, bool canceled)
+    {
+        if (id == _xferEndedId) return;
+        _xferEndedId = id;
+        _xferBusy = false;
+        _xferSending = false;
+        _xferPaused = false;
+        _xferActiveId = -1;
+        _spdLastTick = 0; _spdLastSent = 0; _spdBytesPerSec = 0;
+        lock (_pendingGate)
+        {
+            if (_pending?.Id == id) { _pending = null; Badge = BadgeState.None; }
+        }
+        _dropIn = null;
+        TransferJournal.Finish(id, canceled ? XferState.Canceled : XferState.Failed, null, reason);
+        OnTransferUiEnded();
+        UiUtil.Run(() => _toast?.Show(canceled ? "已取消" : "传输失败", reason, null, 3000));
+    }
+
     void OnXferSendDone(long id)
     {
+        if (id == _xferEndedId) return;      // 已被本地取消处理过，忽略迟到的完成事件
+        _xferEndedId = id;
+        _xferActiveId = -1;
         bool wasSending = _xferSending;
         _xferBusy = false;
         _xferSending = false;
@@ -2716,6 +2751,9 @@ public class Orchestrator : IDisposable
 
     void OnXferRecvDone(long id, List<string> stagedPaths)
     {
+        if (id == _xferEndedId) return;      // 已被本地取消处理过，忽略迟到的完成事件
+        _xferEndedId = id;
+        _xferActiveId = -1;
         bool wasRecv = _xferBusy && !_xferSending;
         _xferBusy = false;
         _xferPaused = false;
@@ -2813,17 +2851,11 @@ public class Orchestrator : IDisposable
 
     void OnXferFailed(long id, string reason)
     {
-        _xferBusy = false;
-        _xferPaused = false;
-        OnTransferUiEnded();
-        lock (_pendingGate)
-        {
-            if (_pending?.Id == id) { _pending = null; Badge = BadgeState.None; }
-        }
-        _dropIn = null;
+        // 本地主动取消已由 FinishLocalTransfer 收口时，对端回发的 xfer_fail 走到这里
+        // 会被闸拦住 —— 这就是"已取消"提示反复弹的根因之一（两条路各弹一次）。
+        if (id == _xferEndedId) { Log.Debug($"忽略重复的传输失败事件 id={id}"); return; }
         bool canceled = reason.Contains("取消");
-        TransferJournal.Finish(id, canceled ? XferState.Canceled : XferState.Failed, null, reason);
-        UiUtil.Run(() => _toast?.Show(canceled ? "已取消" : "传输失败", reason, null, 4000));
+        FinishLocalTransfer(id, reason, canceled);
     }
 
     /// <summary>传输完成后延迟清理暂存目录（剪贴板还引用着这些文件，稍后删）。</summary>
