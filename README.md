@@ -231,3 +231,12 @@ python tools/legend_hover_test.py    # 端到端验证"悬停颜色图例 → �
 > 窗口不置顶，截出来全是压在上面的 IDE 画面。声明后 `SetWindowPos(hwnd, -1, ...)` 才真正生效。
 
 技术栈：C#（WPF + WinForms），双目标 .NET 8 / .NET Framework 4.8，全部 P/Invoke 自包含，无第三方 UI 库。
+
+## 支持作者
+
+<picture>
+  <source srcset="https://cdn.jsdelivr.net/gh/Thomajesty/MouseBridge@main/MouseBridge/Assets/support-qrcodes.png"
+          type="image/png">
+  <img src="https://raw.githubusercontent.com/Thomajesty/MouseBridge/main/MouseBridge/Assets/support-qrcodes.png"
+       alt="微信 / 支付宝 收款码" width="360">
+</picture>
