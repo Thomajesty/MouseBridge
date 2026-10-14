@@ -47,8 +47,66 @@ public class FileTransferService
 
     public void CancelSending()
     {
+        _paused = false;
+        _resumeGate.Set();               // 让还卡在"暂停等待"里的发送循环立刻感知取消
         try { _sendCts.Cancel(); } catch { }
         _sendCts = new CancellationTokenSource();
+    }
+
+    // —— 暂停 / 恢复（需求：传输框可暂停/停止）——
+    // 发送循环（带取消令牌）与接收写线程（无令牌）都会等这个门；
+    // 接收侧暂停时不再写盘 → TCP 背压自然停住发送端，无需对端配合。
+    volatile bool _paused;
+    readonly ManualResetEventSlim _resumeGate = new(true);
+
+    /// <summary>当前是否处于暂停状态（UI 显示用）。</summary>
+    public bool IsPaused => _paused;
+
+    /// <summary>暂停当前传输（发送端停读停发；接收端停写 → 背压停住对端）。</summary>
+    public void PauseTransfer()
+    {
+        if (_paused) return;
+        _paused = true;
+        _resumeGate.Reset();
+        Log.Info("传输已暂停");
+    }
+
+    /// <summary>恢复当前传输。</summary>
+    public void ResumeTransfer()
+    {
+        if (!_paused) return;
+        _paused = false;
+        _resumeGate.Set();
+        Log.Info("传输已恢复");
+    }
+
+    /// <summary>取消时必须同时解除暂停，否则发送循环卡在门上感知不到取消。</summary>
+    void UnpauseForCancel()
+    {
+        _paused = false;
+        _resumeGate.Set();
+    }
+
+    /// <summary>发送循环里用：暂停期间打转，直到恢复或取消（取消抛 OCE）。</summary>
+    void WaitWhilePausedSending(CancellationToken ct)
+    {
+        while (_paused)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { _resumeGate.Wait(200, ct); }
+            catch (OperationCanceledException) { throw; }
+        }
+    }
+
+    /// <summary>接收写线程里用：暂停期间打转；__cancel 到来前 CancelRecvInternal 会解除暂停，
+    /// 所以这里不会吞掉取消消息。</summary>
+    void WaitWhilePausedRecv()
+    {
+        while (_paused && _recv != null)
+        {
+            try { _resumeGate.Wait(150); }
+            catch { return; }
+        }
     }
 
     // ================= 发送 =================
@@ -78,6 +136,7 @@ public class FileTransferService
             for (int i = 0; i < items.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
+                WaitWhilePausedSending(ct);   // 每个条目开传前也检查暂停
                 var it = items[i];
                 await _send(new Msg
                 {
@@ -107,6 +166,7 @@ public class FileTransferService
                     while ((r = await StreamEx.ReadAsync(fs, buf, 0, buf.Length, ct)) > 0)
                     {
                         ct.ThrowIfCancellationRequested();
+                        WaitWhilePausedSending(ct);   // 暂停：停在这里，不再发块也不读盘
                         var chunk = new byte[r];
                         Buffer.BlockCopy(buf, 0, chunk, 0, r);
                         await _send(new Msg { T = "file_chunk", Id = id, Idx = i }, chunk);
@@ -260,6 +320,8 @@ public class FileTransferService
                 case "file_chunk":
                     if (payload != null && r.Fs != null)
                     {
+                        WaitWhilePausedRecv();        // 暂停：写线程停住 → TCP 背压停住发送端
+                        if (r.Fs == null) return;     // 暂停期间可能已被取消
                         r.Fs.Write(payload, 0, payload.Length);
                         r.Got += payload.Length;
                         Progress?.Invoke(r.Id, r.Got, Math.Max(r.Total, 1));
@@ -315,6 +377,7 @@ public class FileTransferService
 
     void CancelRecvInternal()
     {
+        UnpauseForCancel();                  // 解除暂停，让写线程能处理后续消息
         var r = _recv;
         _recv = null;
         if (r == null) return;
